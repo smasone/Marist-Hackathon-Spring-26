@@ -62,14 +62,22 @@ npm run start       # Run once with tsx
 | URL | Description |
 |-----|-------------|
 | [http://localhost:3001/health](http://localhost:3001/health) | Liveness JSON (`{ "status": "ok" }`). Port follows `PORT` or defaults to **3001** (see `src/config/env.ts`). |
-| [http://localhost:3001/api/parking/summary](http://localhost:3001/api/parking/summary) | Latest snapshot per lot (seed data after `npm run seed-db`). |
-| [http://localhost:3001/api-docs](http://localhost:3001/api-docs) | **Swagger UI** for the routes above. |
+| [http://localhost:3001/api/parking/summary](http://localhost:3001/api/parking/summary) | Latest snapshot per lot (joins `parking_lots` + `parking_snapshots`; same idea as the seeded demo data). |
+| [http://localhost:3001/api/parking/busy-before-nine](http://localhost:3001/api/parking/busy-before-nine) | Lots with high average occupancy before 9:00 (query: `?threshold=90`). |
+| [http://localhost:3001/api/parking/lots](http://localhost:3001/api/parking/lots) | All rows from `parking_lots` (`id`, codes, names, zone). |
+| [http://localhost:3001/api/parking/snapshots/latest](http://localhost:3001/api/parking/snapshots/latest) | Latest `parking_snapshots` row per `lot_id` (raw snapshot columns). |
+| [http://localhost:3001/api/parking/lots/DEMO-N-01](http://localhost:3001/api/parking/lots/DEMO-N-01) | One lot by `lot_code`, with its latest snapshot object or `null`. |
+| [http://localhost:3001/api-docs](http://localhost:3001/api-docs) | **Swagger UI** for all routes. |
 
 Quick checks with **curl** (use your real port if you changed `PORT`):
 
 ```bash
 curl -s http://localhost:3001/health
 curl -s http://localhost:3001/api/parking/summary
+curl -s "http://localhost:3001/api/parking/busy-before-nine?threshold=85"
+curl -s http://localhost:3001/api/parking/lots
+curl -s http://localhost:3001/api/parking/snapshots/latest
+curl -s http://localhost:3001/api/parking/lots/DEMO-N-01
 ```
 
 **Do not commit `.env`** or real credentials.
