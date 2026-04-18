@@ -51,3 +51,6 @@ temp/
 
 # Jest / test artifacts
 .junit.xml
+
+# Joanna
+design-docs/
