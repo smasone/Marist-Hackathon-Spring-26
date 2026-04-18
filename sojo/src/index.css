@@ -1,0 +1,304 @@
+@import "tailwindcss";
+/* @import "tailwindcss/preflight";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities"; */
+
+/* ===== BASE ===== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --cyan: #22d3ee;
+  --green: #4ade80;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --purple: #a78bfa;
+  --s900: #0a0c0f;
+  --s800: #111318;
+  --s700: #181c23;
+  --s600: #1f242e;
+  --s500: #262d39;
+}
+
+/* ===== SCROLLBAR ===== */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ===== MAP GRID ===== */
+.map-grid-overlay {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* ===== SCAN LINE ===== */
+.scan-line {
+  animation: scan 4s linear infinite;
+  top: 0;
+}
+@keyframes scan {
+  0% {
+    top: -2px;
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+  }
+  95% {
+    opacity: 1;
+  }
+  100% {
+    top: calc(100% + 2px);
+    opacity: 0;
+  }
+}
+
+/* ===== PULSE SLOW (Tailwind custom anim) ===== */
+@keyframes pulse-slow {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+.animate-pulse-slow {
+  animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ===== USER TAB ===== */
+.user-tab {
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+.user-tab:hover {
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.04);
+}
+.active-tab {
+  background: rgba(34, 211, 238, 0.15) !important;
+  color: #22d3ee !important;
+  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.2);
+}
+
+/* ===== TIME TAB ===== */
+.time-tab {
+  color: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+.time-tab:hover {
+  color: rgba(255, 255, 255, 0.6);
+}
+.active-time {
+  background: rgba(167, 139, 250, 0.15) !important;
+  color: #a78bfa !important;
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.2);
+}
+
+/* ===== SORT BTN ===== */
+.active-sort {
+  color: rgba(255, 255, 255, 0.7) !important;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+}
+
+/* ===== LOT CARD ===== */
+.lot-card {
+  background: var(--s700);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  animation: fadeUp 0.3s ease forwards;
+  opacity: 0;
+}
+.lot-card:hover {
+  border-color: rgba(255, 255, 255, 0.09);
+  background: var(--s600);
+  transform: translateX(2px);
+}
+.lot-card.selected {
+  border-color: rgba(34, 211, 238, 0.25);
+  background: rgba(34, 211, 238, 0.06);
+  transform: translateX(2px);
+}
+.lot-card.no-access {
+  opacity: 0.4;
+}
+.lot-card.no-access:hover {
+  opacity: 0.55;
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== OCCUPANCY BAR ===== */
+.occ-bar-bg {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  height: 4px;
+  overflow: hidden;
+}
+.occ-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.5s ease;
+}
+
+/* ===== MAP PINS ===== */
+.map-pin-group {
+  cursor: pointer;
+  transition: transform 0.18s ease;
+  transform-origin: center;
+}
+.map-pin-group:hover {
+  transform: scale(1.15);
+}
+.map-pin-group.selected {
+  filter: drop-shadow(0 0 8px var(--cyan));
+}
+
+/* ===== PULSE RING ===== */
+.pin-pulse {
+  animation: pinPulse 2s ease-out infinite;
+}
+@keyframes pinPulse {
+  0% {
+    r: 14;
+    opacity: 0.6;
+  }
+  100% {
+    r: 22;
+    opacity: 0;
+  }
+}
+
+/* ===== BADGE CHIPS ===== */
+.badge-open {
+  color: var(--green);
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.2);
+}
+.badge-busy {
+  color: var(--amber);
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+.badge-full {
+  color: var(--red);
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+.badge-closed {
+  color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ===== PERMISSION TAGS ===== */
+.perm-tag {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+.perm-tag-student {
+  color: var(--cyan);
+  background: rgba(34, 211, 238, 0.08);
+  border-color: rgba(34, 211, 238, 0.2);
+}
+.perm-tag-faculty {
+  color: var(--amber);
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+.perm-tag-staff {
+  color: var(--green);
+  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.2);
+}
+.perm-tag-visitor {
+  color: var(--purple);
+  background: rgba(167, 139, 250, 0.08);
+  border-color: rgba(167, 139, 250, 0.2);
+}
+
+/* ===== ALTERNATIVE LOT CHIP ===== */
+.alt-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--s700);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.alt-chip:hover {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--s600);
+}
+
+/* ===== REFRESH SPIN ===== */
+.spin {
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ===== TOAST ===== */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--s600);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  opacity: 0;
+  transition: all 0.3s ease;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ===== LOT BADGE CHIP ===== */
+.lot-badge-chip {
+  display: inline-flex;
+  align-items: center;
+}
