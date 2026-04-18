@@ -9,6 +9,11 @@ This template provides a minimal setup to get React working in Vite with HMR and
 3. The Vite dev server **proxies `/api/*` to `http://127.0.0.1:3001`**, so the UI can call **`/api/parking/summary`** without extra CORS setup.
 4. Optional: copy **`.env.example`** to **`.env`** and set **`VITE_API_BASE_URL`** if the API is not proxied (e.g. production or a custom port you wire manually).
 
+The app now uses backend parking endpoints for:
+- lot list + summary rendering
+- recommendation card logic (lowest live occupancy for selected access type)
+- "Ask the AI" requests via `POST /api/parking/ask`
+
 ---
 
 ## Upstream template notes

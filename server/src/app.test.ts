@@ -126,3 +126,26 @@ describe("GET /api/parking/lots/:lotCode", () => {
     expect(res.body).toEqual({ error: "Lot not found" });
   });
 });
+
+describe("POST /api/parking/ask", () => {
+  it("returns a recommendation answer from live DB summaries", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "What is the best faculty lot right now?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        intent: "recommendation",
+        answer: expect.any(String),
+      })
+    );
+  });
+
+  it("returns 400 when question is missing", async () => {
+    const res = await request(app).post("/api/parking/ask").send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Question is required" });
+  });
+});

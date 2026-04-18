@@ -1,74 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import "./index.css";
 import logo from "./marist-logo.png"; // place your uploaded logo in src folder
-import { fetchParkingSummary, type ParkingLotSummary } from "./parkingApi";
+import {
+  askParking,
+  fetchParkingLots,
+  fetchParkingSummary,
+  type ParkingAskResponse,
+  type ParkingLotListItem,
+  type ParkingLotSummary,
+} from "./parkingApi";
 
 type UserType = "resident" | "commuter" | "faculty" | "visitor";
 type TimeView = "now" | "1h" | "2h";
 
-interface ParkingLot {
-  name: string;
-  permit: UserType[];
-  spaces: number;
-  handicapSpaces: number;
-  walk: number;
-  occupancy: {
-    now: number;
-    "1h": number;
-    "2h": number;
-  };
+interface LiveParkingLot {
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
+  occupancyPercent: number | null;
+  latestSnapshotTime: string | null;
 }
-
-const LOTS: ParkingLot[] = [
-  {
-    name: "McCann / Sheahan",
-    permit: ["resident", "commuter", "faculty"],
-    spaces: 220,
-    handicapSpaces: 10,
-    walk: 4,
-    occupancy: { now: 0.6, "1h": 0.72, "2h": 0.55 },
-  },
-  {
-    name: "Foy",
-    permit: ["faculty"],
-    spaces: 80,
-    handicapSpaces: 5,
-    walk: 2,
-    occupancy: { now: 0.85, "1h": 0.94, "2h": 0.72 },
-  },
-  {
-    name: "Dyson",
-    permit: ["faculty"],
-    spaces: 75,
-    handicapSpaces: 3,
-    walk: 3,
-    occupancy: { now: 0.78, "1h": 0.86, "2h": 0.66 },
-  },
-  {
-    name: "Beck West",
-    permit: ["resident", "commuter", "faculty"],
-    spaces: 170,
-    handicapSpaces: 8,
-    walk: 5,
-    occupancy: { now: 0.52, "1h": 0.63, "2h": 0.56 },
-  },
-  {
-    name: "Riverview",
-    permit: ["resident", "commuter", "faculty"],
-    spaces: 250,
-    handicapSpaces: 15,
-    walk: 7,
-    occupancy: { now: 0.38, "1h": 0.51, "2h": 0.42 },
-  },
-  {
-    name: "Midrise",
-    permit: ["visitor", "faculty"],
-    spaces: 95,
-    handicapSpaces: 5,
-    walk: 2,
-    occupancy: { now: 0.57, "1h": 0.67, "2h": 0.6 },
-  },
-];
 
 function getColor(v: number) {
   if (v > 0.8) return "#eab308"; // yellow
@@ -84,9 +35,13 @@ export default function App() {
   const [user, setUser] = useState<UserType>("commuter");
   const [time, setTime] = useState<TimeView>("now");
   const [clock, setClock] = useState("");
-  const [apiLots, setApiLots] = useState<ParkingLotSummary[] | null>(null);
+  const [apiLots, setApiLots] = useState<LiveParkingLot[] | null>(null);
   const [apiLoading, setApiLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [askInput, setAskInput] = useState("");
+  const [askLoading, setAskLoading] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  const [askResult, setAskResult] = useState<ParkingAskResponse | null>(null);
 
   useEffect(() => {
     const update = () => {
@@ -110,9 +65,19 @@ export default function App() {
       setApiLoading(true);
       setApiError(null);
       try {
-        const rows = await fetchParkingSummary();
+        const [summaryRows, lotRows] = await Promise.all([
+          fetchParkingSummary(),
+          fetchParkingLots(),
+        ]);
+        const zoneByCode = new Map<string, string>(
+          lotRows.map((row: ParkingLotListItem) => [row.lotCode, row.zoneType]),
+        );
+        const merged: LiveParkingLot[] = summaryRows.map((row: ParkingLotSummary) => ({
+          ...row,
+          zoneType: zoneByCode.get(row.lotCode) ?? row.zoneType,
+        }));
         if (!cancelled) {
-          setApiLots(rows);
+          setApiLots(merged);
         }
       } catch (err) {
         if (!cancelled) {
@@ -132,9 +97,15 @@ export default function App() {
     };
   }, []);
 
-  const availableLots = useMemo(() => {
-    return LOTS.filter((lot) => lot.permit.includes(user));
+  const allowedZones = useMemo(() => {
+    if (user === "faculty") return new Set(["faculty"]);
+    if (user === "visitor") return new Set(["visitor"]);
+    return new Set(["student"]);
   }, [user]);
+
+  const availableLots = useMemo(() => {
+    return (apiLots ?? []).filter((lot) => allowedZones.has(lot.zoneType.toLowerCase()));
+  }, [allowedZones, apiLots]);
 
   const stats = useMemo(() => {
     let open = 0;
@@ -142,22 +113,43 @@ export default function App() {
     let full = 0;
 
     availableLots.forEach((lot) => {
-      const occ = lot.occupancy[time];
-      if (occ > 0.8) full++;
-      else if (occ > 0.6) busy++;
+      if (lot.occupancyPercent === null) {
+        return;
+      }
+      if (lot.occupancyPercent >= 90) full++;
+      else if (lot.occupancyPercent >= 70) busy++;
       else open++;
     });
 
     return { open, busy, full };
-  }, [availableLots, time]);
+  }, [availableLots]);
 
   const bestLot = useMemo(() => {
     return [...availableLots].sort((a, b) => {
-      const scoreA = a.occupancy[time] * 100 + a.walk * 4;
-      const scoreB = b.occupancy[time] * 100 + b.walk * 4;
+      const scoreA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
+      const scoreB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
       return scoreA - scoreB;
     })[0];
-  }, [availableLots, time]);
+  }, [availableLots]);
+
+  async function submitAsk(): Promise<void> {
+    const question = askInput.trim();
+    if (!question) {
+      setAskError("Enter a parking question first.");
+      return;
+    }
+    setAskLoading(true);
+    setAskError(null);
+    setAskResult(null);
+    try {
+      const response = await askParking(question);
+      setAskResult(response);
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : "Could not get an answer");
+    } finally {
+      setAskLoading(false);
+    }
+  }
 
   return (
     <div
@@ -189,6 +181,9 @@ export default function App() {
             <p style={{ margin: 0, color: "#6b7280" }}>
               Live statistics • Smart recommendations • {clock}
             </p>
+          <p style={{ margin: "8px 0 0 0", color: "#94a3b8", fontSize: 12 }}>
+            Time toggles are visual only right now; backend currently stores latest real snapshots.
+          </p>
           </div>
         </div>
 
@@ -369,18 +364,83 @@ export default function App() {
           }}
         >
           <h2 style={{ marginTop: 0, color: "#be123c" }}>Best Suggested Lot</h2>
-          <h3 style={{ marginBottom: 8 }}>{bestLot.name}</h3>
+          <h3 style={{ marginBottom: 8 }}>
+            {bestLot.lotName} ({bestLot.lotCode})
+          </h3>
 
           <p style={{ color: "#475569" }}>
-            Occupancy: {percent(bestLot.occupancy[time])} • {bestLot.walk} min
-            walk
+            Occupancy:{" "}
+            {bestLot.occupancyPercent === null
+              ? "Unknown"
+              : `${bestLot.occupancyPercent}%`}{" "}
+            • Zone: {bestLot.zoneType}
           </p>
 
           <p style={{ color: "#16a34a", fontWeight: 600 }}>
-            Lowest traffic + closest available option for your permit.
+            Lowest current occupancy in your selected access category.
           </p>
         </div>
       )}
+
+      {/* ASK AI */}
+      <div
+        style={{
+          background: "white",
+          borderRadius: 20,
+          padding: 24,
+          boxShadow: "0 8px 20px rgba(0,0,0,.05)",
+          marginBottom: 24,
+        }}
+      >
+        <h2 style={{ color: "#be123c", marginTop: 0 }}>Ask the AI</h2>
+        <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
+          Questions are routed to <code>POST /api/parking/ask</code> and answered from backend data only.
+        </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input
+            value={askInput}
+            onChange={(e) => setAskInput(e.target.value)}
+            placeholder="Try: best faculty lot right now?"
+            style={{
+              flex: 1,
+              minWidth: 260,
+              padding: "10px 12px",
+              border: "1px solid #cbd5e1",
+              borderRadius: 10,
+            }}
+          />
+          <button
+            onClick={() => void submitAsk()}
+            disabled={askLoading}
+            style={{
+              padding: "10px 16px",
+              border: "none",
+              borderRadius: 10,
+              cursor: askLoading ? "not-allowed" : "pointer",
+              background: "#be123c",
+              color: "white",
+              fontWeight: 600,
+              opacity: askLoading ? 0.7 : 1,
+            }}
+          >
+            {askLoading ? "Asking..." : "Ask"}
+          </button>
+        </div>
+        {askError && <p style={{ color: "#b91c1c", marginBottom: 0 }}>{askError}</p>}
+        {askResult && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 10,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <p style={{ margin: 0, color: "#334155" }}>{askResult.answer}</p>
+          </div>
+        )}
+      </div>
 
       {/* LOT LIST */}
       <div
@@ -396,12 +456,12 @@ export default function App() {
         </h2>
 
         {availableLots.map((lot) => {
-          const occ = lot.occupancy[time];
-          const free = Math.round(lot.spaces * (1 - occ));
+          const occupancyFraction =
+            lot.occupancyPercent === null ? null : lot.occupancyPercent / 100;
 
           return (
             <div
-              key={lot.name}
+              key={lot.lotCode}
               style={{
                 borderBottom: "1px solid #e5e7eb",
                 padding: "18px 0",
@@ -414,8 +474,12 @@ export default function App() {
                   marginBottom: 8,
                 }}
               >
-                <strong>{lot.name}</strong>
-                <strong style={{ color: getColor(occ) }}>{percent(occ)}</strong>
+                <strong>
+                  {lot.lotName} ({lot.lotCode})
+                </strong>
+                <strong style={{ color: occupancyFraction === null ? "#64748b" : getColor(occupancyFraction) }}>
+                  {lot.occupancyPercent === null ? "Unknown" : `${lot.occupancyPercent}%`}
+                </strong>
               </div>
 
               <div
@@ -426,13 +490,15 @@ export default function App() {
                   overflow: "hidden",
                 }}
               >
-                <div
-                  style={{
-                    width: percent(occ),
-                    height: "100%",
-                    background: getColor(occ),
-                  }}
-                />
+                {occupancyFraction !== null && (
+                  <div
+                    style={{
+                      width: percent(occupancyFraction),
+                      height: "100%",
+                      background: getColor(occupancyFraction),
+                    }}
+                  />
+                )}
               </div>
 
               <div
@@ -444,8 +510,13 @@ export default function App() {
                   fontSize: 14,
                 }}
               >
-                <span>{free} spots free</span>
-                <span>{lot.walk} min walk</span>
+                <span>Zone: {lot.zoneType}</span>
+                <span>
+                  Snapshot:{" "}
+                  {lot.latestSnapshotTime === null
+                    ? "—"
+                    : new Date(lot.latestSnapshotTime).toLocaleString()}
+                </span>
               </div>
             </div>
           );
