@@ -49,11 +49,35 @@ npm run test-db
 
 The seed script adds fake but deterministic rows so you can run queries and demos without real campus data. Replace or extend seed data as your schema grows.
 
+## HTTP API
+
+Entry point: **`src/index.ts`**. Requires **`DATABASE_URL`** in `.env` (the app loads DB config on startup).
+
+```bash
+npm run dev         # Watch mode (recommended while coding)
+# or
+npm run start       # Run once with tsx
+```
+
+| URL | Description |
+|-----|-------------|
+| [http://localhost:3001/health](http://localhost:3001/health) | Liveness JSON (`{ "status": "ok" }`). Port follows `PORT` or defaults to **3001** (see `src/config/env.ts`). |
+| [http://localhost:3001/api/parking/summary](http://localhost:3001/api/parking/summary) | Latest snapshot per lot (seed data after `npm run seed-db`). |
+| [http://localhost:3001/api-docs](http://localhost:3001/api-docs) | **Swagger UI** for the routes above. |
+
+Quick checks with **curl** (use your real port if you changed `PORT`):
+
+```bash
+curl -s http://localhost:3001/health
+curl -s http://localhost:3001/api/parking/summary
+```
+
+**Do not commit `.env`** or real credentials.
+
 ## Useful commands
 
 ```bash
 npm run typecheck   # TypeScript check without emitting files
 npm run build       # Compile to dist/
+npm run start:dist  # Run compiled output from dist/ (after build)
 ```
-
-There is no HTTP server entrypoint in this folder yet; import **`ParkingAnalyticsService`** from application code when you add routes.

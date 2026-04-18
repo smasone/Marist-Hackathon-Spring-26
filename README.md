@@ -6,4 +6,4 @@ Hackathon workspace.
 
 The TypeScript/Postgres backend lives in **`server/`**.
 
-- **Setup, env vars, and database commands:** see **[server/README.md](server/README.md)**.
+- **Setup, env vars, database commands, and API / Swagger (`/api-docs`):** see **[server/README.md](server/README.md)**.
