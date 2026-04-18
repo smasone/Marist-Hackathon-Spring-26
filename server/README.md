@@ -19,7 +19,7 @@ npm install
 
 ## Environment
 
-1. Copy the example env file:
+1. Copy the example env file (repo includes **`.env.example`**):
 
    ```bash
    cp .env.example .env
@@ -49,9 +49,20 @@ npm run test-db
 
 The seed script adds fake but deterministic rows so you can run queries and demos without real campus data. Replace or extend seed data as your schema grows.
 
+## Automated API tests (Jest + supertest)
+
+From **`server/`**, with **`DATABASE_URL`** in **`.env`** and demo data seeded (`npm run seed-db`):
+
+```bash
+npm test
+```
+
+- The Express app is built in **`src/app.ts`** and imported by **`src/index.ts`** (listen only) so tests can hit routes **without** opening a listening port.
+- Tests call the **real** read-only handlers and Postgres (same as local dev). They expect the seeded lot codes **`DEMO-N-01`**, **`DEMO-S-02`**, and **`DEMO-E-03`** to exist.
+
 ## HTTP API
 
-Entry point: **`src/index.ts`**. Requires **`DATABASE_URL`** in `.env` (the app loads DB config on startup).
+Entry point: **`src/index.ts`** (starts the server); routes live in **`src/app.ts`**. Requires **`DATABASE_URL`** in `.env` (the app loads DB config on startup).
 
 ```bash
 npm run dev         # Watch mode (recommended while coding)
@@ -85,7 +96,10 @@ curl -s http://localhost:3001/api/parking/lots/DEMO-N-01
 ## Useful commands
 
 ```bash
+npm test            # Jest + supertest API tests (needs DATABASE_URL + seed; see above)
 npm run typecheck   # TypeScript check without emitting files
 npm run build       # Compile to dist/
 npm run start:dist  # Run compiled output from dist/ (after build)
 ```
+
+Jest is configured with **`forceExit: true`** so the process exits reliably after closing the `pg` pool (some driver timers can otherwise keep Node alive briefly).

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./index.css";
 import logo from "./marist-logo.png"; // place your uploaded logo in src folder
+import { fetchParkingSummary, type ParkingLotSummary } from "./parkingApi";
 
 type UserType = "resident" | "commuter" | "faculty" | "visitor";
 type TimeView = "now" | "1h" | "2h";
@@ -83,6 +84,9 @@ export default function App() {
   const [user, setUser] = useState<UserType>("commuter");
   const [time, setTime] = useState<TimeView>("now");
   const [clock, setClock] = useState("");
+  const [apiLots, setApiLots] = useState<ParkingLotSummary[] | null>(null);
+  const [apiLoading, setApiLoading] = useState(true);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   useEffect(() => {
     const update = () => {
@@ -97,6 +101,35 @@ export default function App() {
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSummary(): Promise<void> {
+      setApiLoading(true);
+      setApiError(null);
+      try {
+        const rows = await fetchParkingSummary();
+        if (!cancelled) {
+          setApiLots(rows);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setApiError(err instanceof Error ? err.message : "Could not load summary");
+          setApiLots(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setApiLoading(false);
+        }
+      }
+    }
+
+    void loadSummary();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const availableLots = useMemo(() => {
@@ -204,6 +237,86 @@ export default function App() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* LIVE API SUMMARY (real backend) */}
+      <div
+        style={{
+          background: "white",
+          borderRadius: 20,
+          padding: 24,
+          boxShadow: "0 8px 20px rgba(0,0,0,.05)",
+          marginBottom: 24,
+        }}
+      >
+        <h2 style={{ color: "#be123c", marginTop: 0 }}>Live lot summary (API)</h2>
+        <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
+          Data from <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> — same fields as
+          the backend JSON.
+        </p>
+
+        {apiLoading && <p style={{ color: "#64748b" }}>Loading…</p>}
+        {apiError && (
+          <p style={{ color: "#b91c1c", fontWeight: 600 }}>
+            {apiError}
+            <span style={{ display: "block", fontWeight: 400, fontSize: 14, marginTop: 8 }}>
+              Start the server on port 3001 (see <code>server/README.md</code>) and use{" "}
+              <code>npm run dev</code> here so Vite can proxy <code>/api</code>, or set{" "}
+              <code>VITE_API_BASE_URL</code>.
+            </span>
+          </p>
+        )}
+        {!apiLoading && !apiError && apiLots && apiLots.length === 0 && (
+          <p style={{ color: "#64748b" }}>No lots returned yet (empty database or no rows).</p>
+        )}
+        {!apiLoading && !apiError && apiLots && apiLots.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 14,
+              }}
+            >
+              <thead>
+                <tr style={{ textAlign: "left", color: "#64748b" }}>
+                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot code</th>
+                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot name</th>
+                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Zone</th>
+                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
+                    Occupancy %
+                  </th>
+                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
+                    Latest snapshot
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {apiLots.map((row) => (
+                  <tr key={row.lotCode}>
+                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                      {row.lotCode}
+                    </td>
+                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                      {row.lotName}
+                    </td>
+                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                      {row.zoneType}
+                    </td>
+                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                      {row.occupancyPercent === null ? "—" : `${row.occupancyPercent}%`}
+                    </td>
+                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                      {row.latestSnapshotTime === null
+                        ? "—"
+                        : new Date(row.latestSnapshotTime).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* STATS */}
