@@ -1,0 +1,53 @@
+
+
+# Node modules and dependency files
+node_modules/
+yarn.lock
+
+
+# Build output
+dist/
+build/
+
+
+# Environment files
+/.env
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+server/.env
+client/.env
+
+
+# Angular CLI and build artefacts
+/.angular-cli.json
+/.ng/
+
+
+# Test coverage
+coverage/
+
+
+# TypeScript cache
+*.tsbuildinfo
+
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+
+# Jest / test artifacts
+.junit.xml
