@@ -170,7 +170,36 @@ function parseBusyThresholdQuery(req: Request): number {
     return 90;
   }
   const n = Number(Array.isArray(raw) ? raw[0] : raw);
-  return Number.isFinite(n) ? n : 90;
+  if (!Number.isFinite(n)) {
+    return 90;
+  }
+  return Math.min(100, Math.max(0, n));
+}
+
+interface AskParkingRequestBody {
+  question?: string;
+}
+
+function normalizeQuestion(rawQuestion: string): string {
+  return rawQuestion.trim().toLowerCase();
+}
+
+function parseZonesFromQuestion(question: string): string[] {
+  const zones: string[] = [];
+  if (question.includes("faculty")) {
+    zones.push("faculty");
+  }
+  if (question.includes("visitor")) {
+    zones.push("visitor");
+  }
+  if (
+    question.includes("student") ||
+    question.includes("commuter") ||
+    question.includes("resident")
+  ) {
+    zones.push("student");
+  }
+  return zones;
 }
 
 /**
@@ -335,6 +364,117 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("GET /api/parking/lots/:lotCode failed:", error);
     res.status(500).json({ error: "Failed to load lot" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/parking/ask:
+ *   post:
+ *     tags: [Parking]
+ *     summary: Answers supported parking questions from DB-backed data only
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [question]
+ *             properties:
+ *               question:
+ *                 type: string
+ *                 example: What is the best faculty lot right now?
+ *     responses:
+ *       200:
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 answer:
+ *                   type: string
+ *                 intent:
+ *                   type: string
+ *       400:
+ *         description: Missing question
+ *       500:
+ *         description: Server error
+ */
+app.post("/api/parking/ask", async (req: Request, res: Response) => {
+  try {
+    const body = req.body as AskParkingRequestBody;
+    const question = typeof body.question === "string" ? body.question.trim() : "";
+    if (question.length === 0) {
+      res.status(400).json({ error: "Question is required" });
+      return;
+    }
+
+    const normalizedQuestion = normalizeQuestion(question);
+    const zones = parseZonesFromQuestion(normalizedQuestion);
+
+    if (
+      normalizedQuestion.includes("best") ||
+      normalizedQuestion.includes("recommend") ||
+      normalizedQuestion.includes("where should")
+    ) {
+      const recommendation = await ParkingAnalyticsService.getRecommendation(zones);
+      if (recommendation === null) {
+        res.json({
+          intent: "recommendation",
+          answer:
+            "I could not find a lot with current snapshot data for that request yet.",
+        });
+        return;
+      }
+      res.json({
+        intent: "recommendation",
+        answer: `Best current option: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`,
+        data: recommendation,
+      });
+      return;
+    }
+
+    if (
+      normalizedQuestion.includes("busy before") ||
+      normalizedQuestion.includes("before 9") ||
+      normalizedQuestion.includes("before nine")
+    ) {
+      const rows = await ParkingAnalyticsService.getBusyLotsBeforeNineAm(90);
+      res.json({
+        intent: "busy_before_nine",
+        answer:
+          rows.length === 0
+            ? "No lots currently meet the 90% average occupancy threshold before 9 AM."
+            : `Before 9 AM, ${rows[0].lotName} (${rows[0].lotCode}) is the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`,
+        data: rows,
+      });
+      return;
+    }
+
+    if (
+      normalizedQuestion.includes("how many") ||
+      normalizedQuestion.includes("list") ||
+      normalizedQuestion.includes("which lot")
+    ) {
+      const lots = await ParkingAnalyticsService.getAllLots();
+      res.json({
+        intent: "lots_list",
+        answer: `There are ${lots.length} lots in the database: ${lots
+          .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
+          .join(", ")}.`,
+        data: lots,
+      });
+      return;
+    }
+
+    res.json({
+      intent: "unsupported",
+      answer:
+        "I can answer supported parking questions about best lot recommendations, busy-before-9 trends, and lot lists using the current backend data.",
+    });
+  } catch (error) {
+    console.error("POST /api/parking/ask failed:", error);
+    res.status(500).json({ error: "Failed to answer parking question" });
   }
 });
 

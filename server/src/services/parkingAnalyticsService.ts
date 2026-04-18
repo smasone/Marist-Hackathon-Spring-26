@@ -65,6 +65,16 @@ export interface LotDetailRow {
     } | null;
 }
 
+/** Recommendation derived only from latest summary rows in Postgres. */
+export interface ParkingRecommendationRow {
+    lotCode: string;
+    lotName: string;
+    zoneType: string;
+    occupancyPercent: number;
+    latestSnapshotTime: Date;
+    reason: string;
+}
+
 /**
  * Parking analytics service.
  */
@@ -265,6 +275,59 @@ export class ParkingAnalyticsService {
             lotName: row.lotName,
             zoneType: row.zoneType,
             latestSnapshot,
+        };
+    }
+
+    /**
+     * Picks a simple "best" lot from current DB summaries.
+     * Lowest occupancy wins; ties are broken by newer snapshot.
+     */
+    public static async getRecommendation(
+        allowedZones?: string[]
+    ): Promise<ParkingRecommendationRow | null> {
+        const summaries = await this.getParkingLotSummaries();
+        const zoneSet =
+            allowedZones && allowedZones.length > 0
+                ? new Set(allowedZones.map((zone) => zone.toLowerCase()))
+                : null;
+
+        const candidates = summaries.filter((row) => {
+            if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
+                return false;
+            }
+            if (!zoneSet) {
+                return true;
+            }
+            return zoneSet.has(row.zoneType.toLowerCase());
+        });
+
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        candidates.sort((a, b) => {
+            const byOccupancy = (a.occupancyPercent as number) - (b.occupancyPercent as number);
+            if (byOccupancy !== 0) {
+                return byOccupancy;
+            }
+            return (
+                (b.latestSnapshotTime as Date).getTime() -
+                (a.latestSnapshotTime as Date).getTime()
+            );
+        });
+
+        const selected = candidates[0];
+        const occupancy = Number(selected.occupancyPercent);
+        return {
+            lotCode: selected.lotCode,
+            lotName: selected.lotName,
+            zoneType: selected.zoneType,
+            occupancyPercent: occupancy,
+            latestSnapshotTime: selected.latestSnapshotTime as Date,
+            reason:
+                occupancy <= 60
+                    ? "Lowest current occupancy among matching lots."
+                    : "Still the best available option among matching lots right now.",
         };
     }
 }

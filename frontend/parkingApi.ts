@@ -28,6 +28,21 @@ export interface ParkingLotSummary {
   latestSnapshotTime: string | null;
 }
 
+/** One row from `GET /api/parking/lots`. */
+export interface ParkingLotListItem {
+  id: number;
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
+}
+
+/** JSON shape from `POST /api/parking/ask`. */
+export interface ParkingAskResponse {
+  intent: string;
+  answer: string;
+  data?: unknown;
+}
+
 /**
  * Fetches the latest snapshot summary for every lot in the database.
  *
@@ -49,4 +64,51 @@ export async function fetchParkingSummary(): Promise<ParkingLotSummary[]> {
   }
 
   return data as ParkingLotSummary[];
+}
+
+/**
+ * Fetches lot metadata from the database-backed endpoint.
+ */
+export async function fetchParkingLots(): Promise<ParkingLotListItem[]> {
+  const base = getApiBaseUrl();
+  const url = `${base}/api/parking/lots`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Request failed (${res.status} ${res.statusText})`);
+  }
+  const data: unknown = await res.json();
+  if (!Array.isArray(data)) {
+    throw new Error("Expected a JSON array from /api/parking/lots");
+  }
+  return data as ParkingLotListItem[];
+}
+
+/**
+ * Sends one user question to the backend AI router.
+ */
+export async function askParking(question: string): Promise<ParkingAskResponse> {
+  const base = getApiBaseUrl();
+  const url = `${base}/api/parking/ask`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ question }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Request failed (${res.status} ${res.statusText})`);
+  }
+
+  const data: unknown = await res.json();
+  if (
+    typeof data !== "object" ||
+    data === null ||
+    !("intent" in data) ||
+    !("answer" in data)
+  ) {
+    throw new Error("Expected a JSON object from /api/parking/ask");
+  }
+  return data as ParkingAskResponse;
 }
