@@ -1,6 +1,19 @@
-# React + TypeScript + Vite
+# React + TypeScript + Vite (parking UI)
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+
+## Run with the hackathon backend
+
+1. In **`server/`**: configure **`.env`**, run **`npm run dev`** (default API port **3001** — see `server/README.md`).
+2. In **`frontend/`**: **`npm install`** then **`npm run dev`**.
+3. The Vite dev server **proxies `/api/*` to `http://127.0.0.1:3001`**, so the UI can call **`/api/parking/summary`** without extra CORS setup.
+4. Optional: copy **`.env.example`** to **`.env`** and set **`VITE_API_BASE_URL`** if the API is not proxied (e.g. production or a custom port you wire manually).
+
+---
+
+## Upstream template notes
+
+The sections below are from the original Vite template.
 
 Currently, two official plugins are available:
 
