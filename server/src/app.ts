@@ -8,6 +8,10 @@ import express, { type Request, type Response } from "express";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
 import { env } from "./config/env";
+import {
+  formatParkingAnswer,
+  type ParkingAskFormatIntent,
+} from "./services/openAiService";
 import { ParkingAnalyticsService } from "./services/parkingAnalyticsService";
 
 const app = express();
@@ -203,6 +207,24 @@ function parseZonesFromQuestion(question: string): string[] {
 }
 
 /**
+ * Uses OpenAI only for wording when `OPENAI_API_KEY` is set; otherwise returns the template.
+ * On model/network errors, returns the deterministic fallback (backend remains authoritative).
+ */
+async function parkingAnswerWithOptionalAiPhrasing(
+  userQuestion: string,
+  intent: ParkingAskFormatIntent,
+  facts: Record<string, unknown>,
+  fallbackAnswer: string
+): Promise<string> {
+  const phrased = await formatParkingAnswer({
+    userQuestion,
+    intent,
+    facts,
+  });
+  return phrased ?? fallbackAnswer;
+}
+
+/**
  * @openapi
  * /api/parking/busy-before-nine:
  *   get:
@@ -373,6 +395,10 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *   post:
  *     tags: [Parking]
  *     summary: Answers supported parking questions from DB-backed data only
+ *     description: >
+ *       Routing and facts always come from the database. When `OPENAI_API_KEY`
+ *       is configured, the `answer` string may be rephrased for readability; otherwise
+ *       a deterministic template is returned. Unsupported questions are unchanged.
  *     requestBody:
  *       required: true
  *       content:
@@ -426,9 +452,27 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         });
         return;
       }
+      const fallbackAnswer = `Best current option: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`;
+      const facts = {
+        zonesRequested: zones,
+        selectedLot: {
+          lotCode: recommendation.lotCode,
+          lotName: recommendation.lotName,
+          zoneType: recommendation.zoneType,
+          occupancyPercent: recommendation.occupancyPercent,
+          latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+          selectionReason: recommendation.reason,
+        },
+      };
+      const answer = await parkingAnswerWithOptionalAiPhrasing(
+        question,
+        "recommendation",
+        facts,
+        fallbackAnswer
+      );
       res.json({
         intent: "recommendation",
-        answer: `Best current option: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`,
+        answer,
         data: recommendation,
       });
       return;
@@ -439,13 +483,31 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       normalizedQuestion.includes("before 9") ||
       normalizedQuestion.includes("before nine")
     ) {
-      const rows = await ParkingAnalyticsService.getBusyLotsBeforeNineAm(90);
+      const busyThreshold = 90;
+      const rows = await ParkingAnalyticsService.getBusyLotsBeforeNineAm(busyThreshold);
+      const fallbackAnswer =
+        rows.length === 0
+          ? "No lots currently meet the 90% average occupancy threshold before 9 AM."
+          : `Before 9 AM, ${rows[0].lotName} (${rows[0].lotCode}) is the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`;
+      const facts = {
+        occupancyThresholdPercent: busyThreshold,
+        matchingLots: rows.map((row) => ({
+          lotCode: row.lotCode,
+          lotName: row.lotName,
+          zoneType: row.zoneType,
+          averageOccupancyPercent: row.averageOccupancyPercent,
+          sampleCount: row.sampleCount,
+        })),
+      };
+      const answer = await parkingAnswerWithOptionalAiPhrasing(
+        question,
+        "busy_before_nine",
+        facts,
+        fallbackAnswer
+      );
       res.json({
         intent: "busy_before_nine",
-        answer:
-          rows.length === 0
-            ? "No lots currently meet the 90% average occupancy threshold before 9 AM."
-            : `Before 9 AM, ${rows[0].lotName} (${rows[0].lotCode}) is the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`,
+        answer,
         data: rows,
       });
       return;
@@ -457,11 +519,26 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       normalizedQuestion.includes("which lot")
     ) {
       const lots = await ParkingAnalyticsService.getAllLots();
+      const fallbackAnswer = `There are ${lots.length} lots in the database: ${lots
+        .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
+        .join(", ")}.`;
+      const facts = {
+        totalCount: lots.length,
+        lots: lots.map((lot) => ({
+          lotCode: lot.lotCode,
+          lotName: lot.lotName,
+          zoneType: lot.zoneType,
+        })),
+      };
+      const answer = await parkingAnswerWithOptionalAiPhrasing(
+        question,
+        "lots_list",
+        facts,
+        fallbackAnswer
+      );
       res.json({
         intent: "lots_list",
-        answer: `There are ${lots.length} lots in the database: ${lots
-          .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
-          .join(", ")}.`,
+        answer,
         data: lots,
       });
       return;
