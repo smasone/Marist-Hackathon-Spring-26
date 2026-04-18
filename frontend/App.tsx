@@ -9,6 +9,7 @@ interface ParkingLot {
   name: string;
   permit: UserType[];
   spaces: number;
+  handicapSpaces: number;
   walk: number;
   occupancy: {
     now: number;
@@ -22,6 +23,7 @@ const LOTS: ParkingLot[] = [
     name: "McCann / Sheahan",
     permit: ["resident", "commuter", "faculty"],
     spaces: 220,
+    handicapSpaces: 10,
     walk: 4,
     occupancy: { now: 0.6, "1h": 0.72, "2h": 0.55 },
   },
@@ -29,6 +31,7 @@ const LOTS: ParkingLot[] = [
     name: "Foy",
     permit: ["faculty"],
     spaces: 80,
+    handicapSpaces: 5,
     walk: 2,
     occupancy: { now: 0.85, "1h": 0.94, "2h": 0.72 },
   },
@@ -36,6 +39,7 @@ const LOTS: ParkingLot[] = [
     name: "Dyson",
     permit: ["faculty"],
     spaces: 75,
+    handicapSpaces: 3,
     walk: 3,
     occupancy: { now: 0.78, "1h": 0.86, "2h": 0.66 },
   },
@@ -43,6 +47,7 @@ const LOTS: ParkingLot[] = [
     name: "Beck West",
     permit: ["resident", "commuter", "faculty"],
     spaces: 170,
+    handicapSpaces: 8,
     walk: 5,
     occupancy: { now: 0.52, "1h": 0.63, "2h": 0.56 },
   },
@@ -50,6 +55,7 @@ const LOTS: ParkingLot[] = [
     name: "Riverview",
     permit: ["resident", "commuter", "faculty"],
     spaces: 250,
+    handicapSpaces: 15,
     walk: 7,
     occupancy: { now: 0.38, "1h": 0.51, "2h": 0.42 },
   },
@@ -57,6 +63,7 @@ const LOTS: ParkingLot[] = [
     name: "Midrise",
     permit: ["visitor", "faculty"],
     spaces: 95,
+    handicapSpaces: 5,
     walk: 2,
     occupancy: { now: 0.57, "1h": 0.67, "2h": 0.6 },
   },
