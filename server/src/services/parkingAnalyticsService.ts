@@ -21,9 +21,57 @@ export interface BusyLotBeforeNineRow {
 }
 
 /**
+ * One row per lot with its latest reading from `parking_snapshots`.
+ * The schema stores occupancy as a percentage only (no per-lot space counts yet).
+ */
+export interface ParkingLotSummaryRow {
+    lotCode: string;
+    lotName: string;
+    zoneType: string;
+    /** Latest `occupancy_percent` for this lot, or null if there are no snapshots. */
+    occupancyPercent: number | null;
+    /** Timestamp of the latest snapshot, or null if there are no snapshots. */
+    latestSnapshotTime: Date | null;
+}
+
+/**
  * Parking analytics service.
  */
 export class ParkingAnalyticsService {
+    /**
+     * Returns each lot in `parking_lots` with its most recent snapshot (if any).
+     * Uses `DISTINCT ON` so each lot appears once with the latest `snapshot_at`.
+     *
+     * @returns Rows ordered by lot id (insertion order for SERIAL ids).
+     */
+    public static async getParkingLotSummaries(): Promise<ParkingLotSummaryRow[]> {
+        const result = await pool.query(
+            `
+      SELECT DISTINCT ON (pl.id)
+        pl.lot_code AS "lotCode",
+        pl.lot_name AS "lotName",
+        pl.zone_type AS "zoneType",
+        ps.occupancy_percent AS "occupancyPercent",
+        ps.snapshot_at AS "latestSnapshotTime"
+      FROM parking_lots pl
+      LEFT JOIN parking_snapshots ps ON ps.lot_id = pl.id
+      ORDER BY pl.id, ps.snapshot_at DESC NULLS LAST;
+      `
+        );
+
+        return result.rows.map((row) => ({
+            lotCode: row.lotCode,
+            lotName: row.lotName,
+            zoneType: row.zoneType,
+            occupancyPercent:
+                row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
+            latestSnapshotTime:
+                row.latestSnapshotTime != null
+                    ? (row.latestSnapshotTime as Date)
+                    : null,
+        }));
+    }
+
     /**
      * Finds lots whose average occupancy percentage is at or above the provided
      * threshold before 9:00 AM.
