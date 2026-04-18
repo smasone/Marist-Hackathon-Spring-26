@@ -8,7 +8,7 @@ import { closePool, getPool } from "./client";
 const SEED_LOT_CODES = ["DEMO-N-01", "DEMO-S-02", "DEMO-E-03"] as const;
 
 /**
- * Deletes existing seed rows and inserts sample lots and observations inside a transaction.
+ * Deletes existing seed rows and inserts sample lots and snapshots inside a transaction.
  *
  * @returns A promise that resolves when seeding completes.
  */
@@ -19,10 +19,10 @@ async function seed(): Promise<void> {
   try {
     await client.query("BEGIN");
 
-    // Remove old seed observations and lots so re-runs do not duplicate rows.
+    // Remove old seed snapshots and lots so re-runs do not duplicate rows.
     await client.query(
       `
-      DELETE FROM parking_observations
+      DELETE FROM parking_snapshots
       WHERE lot_id IN (
         SELECT id FROM parking_lots WHERE lot_code = ANY($1::text[])
       );
@@ -61,10 +61,10 @@ async function seed(): Promise<void> {
       throw new Error("Seed failed: could not resolve inserted lot IDs.");
     }
 
-    // Sample observations: some before 9:00 local time for analytics demos (busy lots before 9 AM).
+    // Sample snapshots: some before 9:00 local time for analytics demos (busy lots before 9 AM).
     await client.query(
       `
-      INSERT INTO parking_observations (lot_id, occupancy_percent, observed_at)
+      INSERT INTO parking_snapshots (lot_id, occupancy_percent, snapshot_at)
       VALUES
         ($1, 92.5, TIMESTAMPTZ '2026-04-10 07:30:00-04'),
         ($1, 95.0, TIMESTAMPTZ '2026-04-11 08:15:00-04'),

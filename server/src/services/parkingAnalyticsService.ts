@@ -43,18 +43,18 @@ export class ParkingAnalyticsService {
         parking_lots.lot_code AS "lotCode",
         parking_lots.lot_name AS "lotName",
         parking_lots.zone_type AS "zoneType",
-        ROUND(AVG(parking_observations.occupancy_percent), 2) AS "averageOccupancyPercent",
+        ROUND(AVG(parking_snapshots.occupancy_percent), 2) AS "averageOccupancyPercent",
         COUNT(*)::int AS "sampleCount"
-      FROM parking_observations
+      FROM parking_snapshots
       INNER JOIN parking_lots
-        ON parking_observations.lot_id = parking_lots.id
-      WHERE EXTRACT(HOUR FROM parking_observations.observed_at) < 9
+        ON parking_snapshots.lot_id = parking_lots.id
+      WHERE EXTRACT(HOUR FROM parking_snapshots.snapshot_at) < 9
       GROUP BY
         parking_lots.lot_code,
         parking_lots.lot_name,
         parking_lots.zone_type
-      HAVING AVG(parking_observations.occupancy_percent) >= $1
-      ORDER BY AVG(parking_observations.occupancy_percent) DESC;
+      HAVING AVG(parking_snapshots.occupancy_percent) >= $1
+      ORDER BY AVG(parking_snapshots.occupancy_percent) DESC;
       `,
             [occupancyThreshold]
         );
