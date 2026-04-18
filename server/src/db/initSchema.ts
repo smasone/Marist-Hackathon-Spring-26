@@ -1,37 +1,38 @@
 /**
- * Applies server/src/db/schema.sql to the database configured by DATABASE_URL.
+ * Applies server/src/db/schema.sql using the local `psql` client and DATABASE_URL.
+ * Loads env the same way as the rest of the server (dotenv via src/config/env.ts).
  */
-import * as fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import * as path from "node:path";
-import { closePool, getPool } from "./client";
+import { env } from "../config/env";
 
 /**
- * Loads the SQL DDL file from this directory.
+ * Resolves the path to schema.sql next to this script.
  *
- * @returns The full contents of schema.sql.
+ * @returns Absolute path to schema.sql.
  */
-function loadSchemaSql(): string {
-  const schemaPath = path.join(__dirname, "schema.sql");
-  return fs.readFileSync(schemaPath, "utf8");
+function getSchemaPath(): string {
+  return path.join(__dirname, "schema.sql");
 }
 
 /**
- * Runs the schema DDL against the database (multiple statements in one round-trip).
+ * Runs `psql` with ON_ERROR_STOP so a failed statement aborts the script.
  *
- * @returns A promise that resolves when the schema has been applied.
+ * @returns void
  */
-async function initSchema(): Promise<void> {
-  const pool = getPool();
-  const sql = loadSchemaSql();
-  await pool.query(sql);
-  console.log("Schema applied from schema.sql");
+function initSchema(): void {
+  const schemaPath = getSchemaPath();
+  execFileSync(
+    "psql",
+    ["-v", "ON_ERROR_STOP=1", "-f", schemaPath, env.databaseUrl],
+    { stdio: "inherit" }
+  );
+  console.log("Schema applied from schema.sql (via psql).");
 }
 
-initSchema()
-  .catch((error: unknown) => {
-    console.error("db:init failed:", error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closePool();
-  });
+try {
+  initSchema();
+} catch (error: unknown) {
+  console.error("db:init failed:", error);
+  process.exitCode = 1;
+}
