@@ -1,12 +1,7 @@
 /**
- * Quick Neon/Postgres connection test.
+ * Quick Neon/Postgres connection test (CLI only; not imported by the HTTP server).
  */
-import { Pool } from "pg";
-import { env } from "../config/env";
-
-const pool = new Pool({
-  connectionString: env.databaseUrl,
-});
+import { closePool, getPool } from "./client";
 
 /**
  * Tests whether the database connection works.
@@ -14,9 +9,10 @@ const pool = new Pool({
  * @returns A promise that resolves when the test completes.
  */
 async function testConnection(): Promise<void> {
+  const pool = getPool();
   const result = await pool.query("SELECT NOW() as now");
   console.log("Database connected:", result.rows[0]);
-  await pool.end();
+  await closePool();
 }
 
 testConnection().catch((error: unknown) => {
