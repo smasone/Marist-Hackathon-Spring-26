@@ -6,14 +6,14 @@ This document tracks what the repository **actually implements** today. Update i
 
 - **Source:** Postgres tables `parking_lots` and `parking_snapshots`, populated for demos via **`npm run seed-db`** (deterministic demo lot codes such as `DEMO-N-01`, etc.).
 - **Nature of data:** Demo / mock-style occupancy for hackathon use — **not** live campus telemetry.
-- **APIs:** Summary, busy-before-9, lot list, per-lot detail, and recommendation-style logic read **only** from this database layer (`ParkingAnalyticsService`).
+- **APIs:** Summary, busy-before-9, lot list, per-lot detail, and recommendation-style logic read **only** from this database layer (`ParkingAnalyticsService`) and treat those snapshots as historical forecast inputs (not live telemetry).
 
 ## “Ask the AI” (`POST /api/parking/ask`)
 
-- **Occupancy / lots / trends:** Questions are keyword-routed to the same SQL-backed analytics as above. Optional OpenAI phrasing (`OPENAI_API_KEY`) may reword answers but facts come from query results.
+- **Occupancy / lots / trends:** Questions are keyword-routed to the same SQL-backed historical analytics as above. Optional OpenAI phrasing (`OPENAI_API_KEY`) may reword answers but facts come from query results.
 - **Permits / rules / policy:** Questions matching a lightweight rules detector are answered from **cached plain text** of Marist’s official public page: [Parking FAQ](https://www.marist.edu/security/parking/faq). The backend fetches HTML, strips tags to plain text, caches in memory and under `server/data/marist-parking-faq-cache.json` (gitignored). Relevant paragraphs are selected by simple token overlap; the model (if configured) must not invent beyond those excerpts.
 - **Athletics advisory (separate source):** When a question is time- or future-shaped (simple heuristics in `questionTimeHeuristics.ts`), the handler may call Marist’s official athletics composite schedule JSON (`goredfoxes.com` Sidearm `responsive-calendar.ashx`, same feed as [the calendar page](https://goredfoxes.com/calendar)), match events near the inferred instant (±4 hours), then **filter** to events that look home/on-campus-relevant (`isAthleticsEventLikelyCampusParkingRelevant` in `maristAthleticsScheduleService.ts` — away/`at` games and obvious opponent-campus locations are dropped). Only passing events get deterministic advisory text and metadata (`eventSignalFound`, `eventImpactNote`, etc.). This **never** replaces the SQL recommendation; failures are non-fatal and may append a short “could not verify athletics events” note only when a lookup was attempted.
-- **Time-shaped parking without recommend keywords:** Questions that mention parking and a time/date but do not match the FAQ detector may be answered like a recommendation (same `ParkingAnalyticsService.getRecommendation` path) with the same demo-data timeliness disclaimer when applicable.
+- **Time-shaped parking without recommend keywords:** Questions that mention parking and a time/date but do not match the FAQ detector may be answered like a recommendation (same `ParkingAnalyticsService.getRecommendation` path), using inferred time context to estimate expected busyness from historical snapshots.
 - **Unsupported:** Safe generic fallback when no route matches.
 
 ### Ask response metadata (rules intent)
@@ -26,7 +26,7 @@ For occupancy intents when a schedule lookup runs, responses may add `sourceType
 
 ## Limitations (explicit)
 
-- Demo occupancy data does not reflect real-time campus availability.
+- Demo occupancy data does not reflect real-time campus availability; all occupancy-oriented answers are forecast estimates from stored historical snapshots.
 - FAQ answers depend on fetch success, cache age, and excerpt matching; users should **verify** critical policy details on the live Marist site.
 - Athletics matching uses naive time parsing and a fixed ±4 hour window; it can miss events, mis-parse ambiguous phrases, or reference the host’s local timezone assumptions—treat any note as **non-authoritative** for parking operations. Home vs away detection is heuristic (Sidearm `location_indicator` / `at_vs` when present, else title/location keywords); edge cases may still slip through.
 - HTML-to-text is intentionally simple (no full browser DOM); edge-case formatting may be imperfect.

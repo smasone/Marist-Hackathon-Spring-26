@@ -47,7 +47,7 @@ describe("POST /api/parking/ask (athletics advisory)", () => {
 
     const res = await request(app)
       .post("/api/parking/ask")
-      .send({ question: "What is the best faculty lot right now?" });
+      .send({ question: "What faculty lot is usually best around noon?" });
 
     expect(res.status).toBe(200);
     expect(spy).toHaveBeenCalled();

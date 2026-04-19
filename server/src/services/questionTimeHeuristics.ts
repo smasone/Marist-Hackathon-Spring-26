@@ -118,8 +118,8 @@ export function mentionsCampusParkingContext(normalizedQuestion: string): boolea
 }
 
 /**
- * When true, occupancy answers should clarify that DB snapshots are "current demo"
- * readings, not a verified forecast for a named future instant.
+ * When true, occupancy answers should clarify that estimates are derived from
+ * stored historical snapshots rather than a live parking feed.
  */
 export function shouldAddDemoTimelinessDisclaimer(normalizedQuestion: string): boolean {
   if (RIGHT_NOW_HINTS.test(normalizedQuestion)) {

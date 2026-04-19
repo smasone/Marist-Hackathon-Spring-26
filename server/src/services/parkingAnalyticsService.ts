@@ -1,17 +1,7 @@
-/**
- * Provides parking analytics queries for the hackathon backend.
- */
-
 import { getPool } from "../db/client";
 
-/**
- * Shared database pool for analytics queries.
- */
 const pool = getPool();
 
-/**
- * Represents a summary row for lots that are highly occupied before 9 AM.
- */
 export interface BusyLotBeforeNineRow {
     lotCode: string;
     lotName: string;
@@ -20,21 +10,16 @@ export interface BusyLotBeforeNineRow {
     sampleCount: number;
 }
 
-/**
- * One row per lot with its latest reading from `parking_snapshots`.
- * The schema stores occupancy as a percentage only (no per-lot space counts yet).
- */
 export interface ParkingLotSummaryRow {
     lotCode: string;
     lotName: string;
     zoneType: string;
-    /** Latest `occupancy_percent` for this lot, or null if there are no snapshots. */
     occupancyPercent: number | null;
-    /** Timestamp of the latest snapshot, or null if there are no snapshots. */
     latestSnapshotTime: Date | null;
+    sampleCount: number;
+    allowedZones: string[];
 }
 
-/** Row from `parking_lots` only (columns map 1:1 to the table). */
 export interface ParkingLotRow {
     id: number;
     lotCode: string;
@@ -42,9 +27,6 @@ export interface ParkingLotRow {
     zoneType: string;
 }
 
-/**
- * One `parking_snapshots` row per lot — the latest by `snapshot_at` for each `lot_id`.
- */
 export interface LatestSnapshotPerLotRow {
     id: number;
     lotId: number;
@@ -52,7 +34,6 @@ export interface LatestSnapshotPerLotRow {
     snapshotAt: Date;
 }
 
-/** One lot plus its most recent snapshot row, if any. */
 export interface LotDetailRow {
     id: number;
     lotCode: string;
@@ -65,85 +46,211 @@ export interface LotDetailRow {
     } | null;
 }
 
-/** Recommendation derived only from latest summary rows in Postgres. */
 export interface ParkingRecommendationRow {
     lotCode: string;
     lotName: string;
     zoneType: string;
     occupancyPercent: number;
     latestSnapshotTime: Date;
+    sampleCount: number;
     reason: string;
 }
 
-/**
- * Parking analytics service.
- */
+export interface ParkingForecastContext {
+    targetHour?: number | null;
+    targetDayOfWeek?: number | null;
+}
+
+function inferZoneType(row: {
+    allowsResidents: boolean;
+    allowsCommuters: boolean;
+    allowsFaculty: boolean;
+    allowsVisitors: boolean;
+}): string {
+    const studentAllowed = row.allowsResidents || row.allowsCommuters;
+    const zones = [
+        studentAllowed ? "student" : null,
+        row.allowsFaculty ? "faculty" : null,
+        row.allowsVisitors ? "visitor" : null,
+    ].filter((z): z is string => z !== null);
+    if (zones.length === 1) {
+        return zones[0];
+    }
+    if (zones.length === 0) {
+        return "unknown";
+    }
+    return "mixed";
+}
+
+function allowedZonesForLot(row: {
+    allowsResidents: boolean;
+    allowsCommuters: boolean;
+    allowsFaculty: boolean;
+    allowsVisitors: boolean;
+}): string[] {
+    const out: string[] = [];
+    if (row.allowsResidents || row.allowsCommuters) {
+        out.push("student");
+    }
+    if (row.allowsFaculty) {
+        out.push("faculty");
+    }
+    if (row.allowsVisitors) {
+        out.push("visitor");
+    }
+    return out;
+}
+
 export class ParkingAnalyticsService {
-    /**
-     * Returns each lot in `parking_lots` with its most recent snapshot (if any).
-     * Uses `DISTINCT ON` so each lot appears once with the latest `snapshot_at`.
-     *
-     * @returns Rows ordered by lot id (insertion order for SERIAL ids).
-     */
-    public static async getParkingLotSummaries(): Promise<ParkingLotSummaryRow[]> {
+    public static async getParkingLotSummaries(
+        context?: ParkingForecastContext
+    ): Promise<ParkingLotSummaryRow[]> {
+        const targetHour = context?.targetHour ?? null;
+        const targetDayOfWeek = context?.targetDayOfWeek ?? null;
         const result = await pool.query(
             `
-      SELECT DISTINCT ON (pl.id)
-        pl.lot_code AS "lotCode",
-        pl.lot_name AS "lotName",
-        pl.zone_type AS "zoneType",
-        ps.occupancy_percent AS "occupancyPercent",
-        ps.snapshot_at AS "latestSnapshotTime"
-      FROM parking_lots pl
-      LEFT JOIN parking_snapshots ps ON ps.lot_id = pl.id
-      ORDER BY pl.id, ps.snapshot_at DESC NULLS LAST;
-      `
+      WITH lot_capacity AS (
+        SELECT lotid, COUNT(*)::int AS capacity
+        FROM spaces
+        GROUP BY lotid
+      ),
+      daily_usage AS (
+        SELECT
+          s.lotid,
+          DATE(h.entrancetime) AS usage_day,
+          COUNT(*)::int AS entry_count,
+          MAX(h.entrancetime) AS latest_time
+        FROM history h
+        INNER JOIN spaces s ON s.spacenum = h.spacenum
+        WHERE ($1::int IS NULL OR EXTRACT(HOUR FROM h.entrancetime) = $1)
+          AND ($2::int IS NULL OR EXTRACT(DOW FROM h.entrancetime) = $2)
+        GROUP BY s.lotid, DATE(h.entrancetime)
+      )
+      SELECT
+        COALESCE(l.altname, l.lotid::text) AS "lotCode",
+        l.lotname AS "lotName",
+        l.allowsresidents AS "allowsResidents",
+        l.allowscommuters AS "allowsCommuters",
+        l.allowsfaculty AS "allowsFaculty",
+        l.allowsvisitors AS "allowsVisitors",
+        ROUND(
+          AVG(
+            LEAST(
+              100,
+              CASE
+                WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+                ELSE (du.entry_count::numeric / lc.capacity::numeric) * 100
+              END
+            )
+          ),
+          2
+        ) AS "occupancyPercent",
+        MAX(du.latest_time) AS "latestSnapshotTime",
+        COUNT(du.usage_day)::int AS "sampleCount"
+      FROM lots l
+      LEFT JOIN lot_capacity lc ON lc.lotid = l.lotid
+      LEFT JOIN daily_usage du ON du.lotid = l.lotid
+      GROUP BY
+        l.lotid,
+        l.lotname,
+        l.allowsresidents,
+        l.allowscommuters,
+        l.allowsfaculty,
+        l.allowsvisitors
+      ORDER BY l.lotid ASC;
+      `,
+            [targetHour, targetDayOfWeek]
         );
 
-        return result.rows.map((row) => ({
-            lotCode: row.lotCode,
-            lotName: row.lotName,
-            zoneType: row.zoneType,
-            occupancyPercent:
-                row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
-            latestSnapshotTime:
-                row.latestSnapshotTime != null
-                    ? (row.latestSnapshotTime as Date)
-                    : null,
-        }));
+        return result.rows.map((row) => {
+            const access = {
+                allowsResidents: Boolean(row.allowsResidents),
+                allowsCommuters: Boolean(row.allowsCommuters),
+                allowsFaculty: Boolean(row.allowsFaculty),
+                allowsVisitors: Boolean(row.allowsVisitors),
+            };
+            return {
+                lotCode: row.lotCode,
+                lotName: row.lotName,
+                zoneType: inferZoneType(access),
+                occupancyPercent:
+                    row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
+                latestSnapshotTime:
+                    row.latestSnapshotTime != null
+                        ? (row.latestSnapshotTime as Date)
+                        : null,
+                sampleCount: Number(row.sampleCount),
+                allowedZones: allowedZonesForLot(access),
+            };
+        });
     }
 
-    /**
-     * Finds lots whose average occupancy percentage is at or above the provided
-     * threshold before 9:00 AM.
-     *
-     * Example use:
-     * - threshold 90 -> "usually very full before 9 AM"
-     *
-     * @param occupancyThreshold The minimum average occupancy percentage.
-     * @returns A list of matching lot summaries sorted from most full to less full.
-     */
     public static async getBusyLotsBeforeNineAm(
         occupancyThreshold: number = 90
     ): Promise<BusyLotBeforeNineRow[]> {
         const result = await pool.query(
             `
+      WITH lot_capacity AS (
+        SELECT lotid, COUNT(*)::int AS capacity
+        FROM spaces
+        GROUP BY lotid
+      ),
+      before_nine_daily AS (
+        SELECT
+          s.lotid,
+          DATE(h.entrancetime) AS usage_day,
+          COUNT(*)::int AS entry_count
+        FROM history h
+        INNER JOIN spaces s ON s.spacenum = h.spacenum
+        WHERE EXTRACT(HOUR FROM h.entrancetime) < 9
+        GROUP BY s.lotid, DATE(h.entrancetime)
+      )
       SELECT
-        parking_lots.lot_code AS "lotCode",
-        parking_lots.lot_name AS "lotName",
-        parking_lots.zone_type AS "zoneType",
-        ROUND(AVG(parking_snapshots.occupancy_percent), 2) AS "averageOccupancyPercent",
-        COUNT(*)::int AS "sampleCount"
-      FROM parking_snapshots
-      INNER JOIN parking_lots
-        ON parking_snapshots.lot_id = parking_lots.id
-      WHERE EXTRACT(HOUR FROM parking_snapshots.snapshot_at) < 9
+        COALESCE(l.altname, l.lotid::text) AS "lotCode",
+        l.lotname AS "lotName",
+        CASE
+          WHEN (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty AND NOT l.allowsvisitors THEN 'student'
+          WHEN l.allowsfaculty AND NOT (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsvisitors THEN 'faculty'
+          WHEN l.allowsvisitors AND NOT (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty THEN 'visitor'
+          WHEN (l.allowsresidents OR l.allowscommuters OR l.allowsfaculty OR l.allowsvisitors) THEN 'mixed'
+          ELSE 'unknown'
+        END AS "zoneType",
+        ROUND(
+          AVG(
+            LEAST(
+              100,
+              CASE
+                WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+                ELSE (bnd.entry_count::numeric / lc.capacity::numeric) * 100
+              END
+            )
+          ),
+          2
+        ) AS "averageOccupancyPercent",
+        COUNT(bnd.usage_day)::int AS "sampleCount"
+      FROM lots l
+      LEFT JOIN lot_capacity lc ON lc.lotid = l.lotid
+      LEFT JOIN before_nine_daily bnd ON bnd.lotid = l.lotid
       GROUP BY
-        parking_lots.lot_code,
-        parking_lots.lot_name,
-        parking_lots.zone_type
-      HAVING AVG(parking_snapshots.occupancy_percent) >= $1
-      ORDER BY AVG(parking_snapshots.occupancy_percent) DESC;
+        l.lotid,
+        l.lotname,
+        l.allowsresidents,
+        l.allowscommuters,
+        l.allowsfaculty,
+        l.allowsvisitors
+      HAVING ROUND(
+        AVG(
+          LEAST(
+            100,
+            CASE
+              WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+              ELSE (bnd.entry_count::numeric / lc.capacity::numeric) * 100
+            END
+          )
+        ),
+        2
+      ) >= $1
+      ORDER BY "averageOccupancyPercent" DESC;
       `,
             [occupancyThreshold]
         );
@@ -157,21 +264,22 @@ export class ParkingAnalyticsService {
         }));
     }
 
-    /**
-     * Lists every row in `parking_lots` ordered by id.
-     *
-     * @returns All lots with real column data (no snapshot join).
-     */
     public static async getAllLots(): Promise<ParkingLotRow[]> {
         const result = await pool.query(
             `
       SELECT
-        id,
-        lot_code AS "lotCode",
-        lot_name AS "lotName",
-        zone_type AS "zoneType"
-      FROM parking_lots
-      ORDER BY id ASC;
+        lotid AS id,
+        COALESCE(altname, lotid::text) AS "lotCode",
+        lotname AS "lotName",
+        CASE
+          WHEN (allowsresidents OR allowscommuters) AND NOT allowsfaculty AND NOT allowsvisitors THEN 'student'
+          WHEN allowsfaculty AND NOT (allowsresidents OR allowscommuters) AND NOT allowsvisitors THEN 'faculty'
+          WHEN allowsvisitors AND NOT (allowsresidents OR allowscommuters) AND NOT allowsfaculty THEN 'visitor'
+          WHEN (allowsresidents OR allowscommuters OR allowsfaculty OR allowsvisitors) THEN 'mixed'
+          ELSE 'unknown'
+        END AS "zoneType"
+      FROM lots
+      ORDER BY lotid ASC;
       `
         );
 
@@ -183,24 +291,56 @@ export class ParkingAnalyticsService {
         }));
     }
 
-    /**
-     * Returns the newest `parking_snapshots` row per `lot_id` (by `snapshot_at`).
-     * Lots with no snapshots do not appear.
-     *
-     * @returns Latest snapshot rows only; columns match the table (camelCase in JSON).
-     */
     public static async getLatestSnapshotsPerLot(): Promise<
         LatestSnapshotPerLotRow[]
     > {
         const result = await pool.query(
             `
-      SELECT DISTINCT ON (ps.lot_id)
-        ps.id AS "id",
-        ps.lot_id AS "lotId",
-        ps.occupancy_percent AS "occupancyPercent",
-        ps.snapshot_at AS "snapshotAt"
-      FROM parking_snapshots ps
-      ORDER BY ps.lot_id, ps.snapshot_at DESC;
+      WITH lot_capacity AS (
+        SELECT lotid, COUNT(*)::int AS capacity
+        FROM spaces
+        GROUP BY lotid
+      ),
+      daily_usage AS (
+        SELECT
+          s.lotid,
+          DATE(h.entrancetime) AS usage_day,
+          COUNT(*)::int AS entry_count,
+          MAX(h.entrancetime) AS snapshot_at
+        FROM history h
+        INNER JOIN spaces s ON s.spacenum = h.spacenum
+        GROUP BY s.lotid, DATE(h.entrancetime)
+      ),
+      ranked AS (
+        SELECT
+          ROW_NUMBER() OVER (
+            PARTITION BY du.lotid
+            ORDER BY du.usage_day DESC
+          ) AS rk,
+          du.lotid,
+          du.entry_count,
+          du.snapshot_at,
+          lc.capacity
+        FROM daily_usage du
+        LEFT JOIN lot_capacity lc ON lc.lotid = du.lotid
+      )
+      SELECT
+        ROW_NUMBER() OVER (ORDER BY r.lotid)::int AS id,
+        r.lotid AS "lotId",
+        ROUND(
+          LEAST(
+            100,
+            CASE
+              WHEN r.capacity IS NULL OR r.capacity = 0 THEN 0
+              ELSE (r.entry_count::numeric / r.capacity::numeric) * 100
+            END
+          ),
+          2
+        ) AS "occupancyPercent",
+        r.snapshot_at AS "snapshotAt"
+      FROM ranked r
+      WHERE r.rk = 1
+      ORDER BY r.lotid ASC;
       `
         );
 
@@ -212,34 +352,66 @@ export class ParkingAnalyticsService {
         }));
     }
 
-    /**
-     * Looks up one lot by `lot_code` and includes its latest snapshot if present.
-     *
-     * @param lotCode Case-sensitive `parking_lots.lot_code` (URL segment).
-     * @returns The lot row or `null` when no matching lot exists.
-     */
     public static async getLotByCode(
         lotCode: string
     ): Promise<LotDetailRow | null> {
         const result = await pool.query(
             `
+      WITH lot_capacity AS (
+        SELECT lotid, COUNT(*)::int AS capacity
+        FROM spaces
+        GROUP BY lotid
+      ),
+      daily_usage AS (
+        SELECT
+          s.lotid,
+          DATE(h.entrancetime) AS usage_day,
+          COUNT(*)::int AS entry_count,
+          MAX(h.entrancetime) AS snapshot_at
+        FROM history h
+        INNER JOIN spaces s ON s.spacenum = h.spacenum
+        GROUP BY s.lotid, DATE(h.entrancetime)
+      ),
+      latest_usage AS (
+        SELECT
+          du.lotid,
+          du.entry_count,
+          du.snapshot_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY du.lotid
+            ORDER BY du.usage_day DESC
+          ) AS rk
+        FROM daily_usage du
+      )
       SELECT
-        pl.id AS "id",
-        pl.lot_code AS "lotCode",
-        pl.lot_name AS "lotName",
-        pl.zone_type AS "zoneType",
-        latest.id AS "snapshotId",
-        latest.occupancy_percent AS "snapshotOccupancyPercent",
-        latest.snapshot_at AS "snapshotAt"
-      FROM parking_lots pl
-      LEFT JOIN LATERAL (
-        SELECT ps.id, ps.occupancy_percent, ps.snapshot_at
-        FROM parking_snapshots ps
-        WHERE ps.lot_id = pl.id
-        ORDER BY ps.snapshot_at DESC
-        LIMIT 1
-      ) latest ON true
-      WHERE pl.lot_code = $1;
+        l.lotid AS "id",
+        COALESCE(l.altname, l.lotid::text) AS "lotCode",
+        l.lotname AS "lotName",
+        CASE
+          WHEN (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty AND NOT l.allowsvisitors THEN 'student'
+          WHEN l.allowsfaculty AND NOT (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsvisitors THEN 'faculty'
+          WHEN l.allowsvisitors AND NOT (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty THEN 'visitor'
+          WHEN (l.allowsresidents OR l.allowscommuters OR l.allowsfaculty OR l.allowsvisitors) THEN 'mixed'
+          ELSE 'unknown'
+        END AS "zoneType",
+        lu.lotid AS "snapshotId",
+        ROUND(
+          LEAST(
+            100,
+            CASE
+              WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+              ELSE (lu.entry_count::numeric / lc.capacity::numeric) * 100
+            END
+          ),
+          2
+        ) AS "snapshotOccupancyPercent",
+        lu.snapshot_at AS "snapshotAt"
+      FROM lots l
+      LEFT JOIN lot_capacity lc ON lc.lotid = l.lotid
+      LEFT JOIN latest_usage lu ON lu.lotid = l.lotid AND lu.rk = 1
+      WHERE l.lotid::text = $1
+        OR l.lotname = $1
+        OR COALESCE(l.altname, '') = $1;
       `,
             [lotCode]
         );
@@ -278,14 +450,11 @@ export class ParkingAnalyticsService {
         };
     }
 
-    /**
-     * Picks a simple "best" lot from current DB summaries.
-     * Lowest occupancy wins; ties are broken by newer snapshot.
-     */
     public static async getRecommendation(
-        allowedZones?: string[]
+        allowedZones?: string[],
+        context?: ParkingForecastContext
     ): Promise<ParkingRecommendationRow | null> {
-        const summaries = await this.getParkingLotSummaries();
+        const summaries = await this.getParkingLotSummaries(context);
         const zoneSet =
             allowedZones && allowedZones.length > 0
                 ? new Set(allowedZones.map((zone) => zone.toLowerCase()))
@@ -295,10 +464,16 @@ export class ParkingAnalyticsService {
             if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
                 return false;
             }
+            if (row.sampleCount <= 0) {
+                return false;
+            }
             if (!zoneSet) {
                 return true;
             }
-            return zoneSet.has(row.zoneType.toLowerCase());
+            if (row.allowedZones.length === 0) {
+                return false;
+            }
+            return row.allowedZones.some((zone) => zoneSet.has(zone.toLowerCase()));
         });
 
         if (candidates.length === 0) {
@@ -309,6 +484,10 @@ export class ParkingAnalyticsService {
             const byOccupancy = (a.occupancyPercent as number) - (b.occupancyPercent as number);
             if (byOccupancy !== 0) {
                 return byOccupancy;
+            }
+            const bySampleCount = b.sampleCount - a.sampleCount;
+            if (bySampleCount !== 0) {
+                return bySampleCount;
             }
             return (
                 (b.latestSnapshotTime as Date).getTime() -
@@ -321,13 +500,22 @@ export class ParkingAnalyticsService {
             zoneSet && zoneSet.size > 0
                 ? `Eligible by zone filter from your question: ${[...zoneSet].sort().join(", ")}. `
                 : "No zone filter applied (all zone types considered). ";
-        const reason = `${zoneSummary}Chosen for lowest current occupancy among lots that have a latest snapshot in the database; ties break toward the newer snapshot.`;
+        const contextSummary =
+            context?.targetHour !== null && context?.targetHour !== undefined
+                ? `Forecast uses historical snapshots from hour ${context.targetHour}:00`
+                : "Forecast uses overall historical parking patterns";
+        const daySummary =
+            context?.targetDayOfWeek !== null && context?.targetDayOfWeek !== undefined
+                ? ` on weekday index ${context.targetDayOfWeek}`
+                : "";
+        const reason = `${zoneSummary}${contextSummary}${daySummary}. Selected for lowest expected occupancy among matching lots (${selected.sampleCount} historical samples); ties favor stronger sample coverage, then newer supporting snapshots.`;
         return {
             lotCode: selected.lotCode,
             lotName: selected.lotName,
             zoneType: selected.zoneType,
             occupancyPercent: Number(selected.occupancyPercent),
             latestSnapshotTime: selected.latestSnapshotTime as Date,
+            sampleCount: selected.sampleCount,
             reason,
         };
     }

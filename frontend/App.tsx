@@ -13,7 +13,7 @@ import {
 type UserType = "resident" | "commuter" | "faculty" | "visitor";
 type TimeView = "now" | "1h" | "2h";
 
-interface LiveParkingLot {
+interface ForecastParkingLot {
   lotCode: string;
   lotName: string;
   zoneType: string;
@@ -35,7 +35,7 @@ export default function App() {
   const [user, setUser] = useState<UserType>("commuter");
   const [time, setTime] = useState<TimeView>("now");
   const [clock, setClock] = useState("");
-  const [apiLots, setApiLots] = useState<LiveParkingLot[] | null>(null);
+  const [apiLots, setApiLots] = useState<ForecastParkingLot[] | null>(null);
   const [apiLoading, setApiLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
   const [askInput, setAskInput] = useState("");
@@ -58,6 +58,16 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  const forecastContext = useMemo(() => {
+    const anchor = new Date();
+    if (time === "1h") {
+      anchor.setHours(anchor.getHours() + 1);
+    } else if (time === "2h") {
+      anchor.setHours(anchor.getHours() + 2);
+    }
+    return { hour: anchor.getHours(), dayOfWeek: anchor.getDay(), label: anchor.toLocaleString() };
+  }, [time]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -66,13 +76,16 @@ export default function App() {
       setApiError(null);
       try {
         const [summaryRows, lotRows] = await Promise.all([
-          fetchParkingSummary(),
+          fetchParkingSummary({
+            hour: forecastContext.hour,
+            dayOfWeek: forecastContext.dayOfWeek,
+          }),
           fetchParkingLots(),
         ]);
         const zoneByCode = new Map<string, string>(
           lotRows.map((row: ParkingLotListItem) => [row.lotCode, row.zoneType]),
         );
-        const merged: LiveParkingLot[] = summaryRows.map((row: ParkingLotSummary) => ({
+        const merged: ForecastParkingLot[] = summaryRows.map((row: ParkingLotSummary) => ({
           ...row,
           zoneType: zoneByCode.get(row.lotCode) ?? row.zoneType,
         }));
@@ -95,7 +108,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [forecastContext.dayOfWeek, forecastContext.hour]);
 
   const allowedZones = useMemo(() => {
     if (user === "faculty") return new Set(["faculty"]);
@@ -108,20 +121,20 @@ export default function App() {
   }, [allowedZones, apiLots]);
 
   const stats = useMemo(() => {
-    let open = 0;
+    let light = 0;
     let busy = 0;
-    let full = 0;
+    let heavy = 0;
 
     availableLots.forEach((lot) => {
       if (lot.occupancyPercent === null) {
         return;
       }
-      if (lot.occupancyPercent >= 90) full++;
+      if (lot.occupancyPercent >= 85) heavy++;
       else if (lot.occupancyPercent >= 70) busy++;
-      else open++;
+      else light++;
     });
 
-    return { open, busy, full };
+    return { light, busy, heavy };
   }, [availableLots]);
 
   const bestLot = useMemo(() => {
@@ -142,7 +155,8 @@ export default function App() {
     setAskError(null);
     setAskResult(null);
     try {
-      const response = await askParking(question);
+      const contextualQuestion = `${question} (arrival context: ${forecastContext.label})`;
+      const response = await askParking(contextualQuestion);
       setAskResult(response);
       requestAnimationFrame(() => {
         document.getElementById("ask-result")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -182,10 +196,10 @@ export default function App() {
               Campus Parking Finder
             </h1>
             <p style={{ margin: 0, color: "#6b7280" }}>
-              Live statistics • Smart recommendations • {clock}
+              Forecasted parking patterns • Smart recommendations • {clock}
             </p>
           <p style={{ margin: "8px 0 0 0", color: "#94a3b8", fontSize: 12 }}>
-            Time toggles are visual only right now; backend currently stores latest real snapshots.
+            Forecasts are based on stored parking history, not live sensor feeds.
           </p>
           </div>
         </div>
@@ -237,7 +251,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* LIVE API SUMMARY (real backend) */}
+      {/* FORECAST API SUMMARY (real backend) */}
       <div
         style={{
           background: "white",
@@ -247,10 +261,10 @@ export default function App() {
           marginBottom: 24,
         }}
       >
-        <h2 style={{ color: "#be123c", marginTop: 0 }}>Live lot summary (API)</h2>
+        <h2 style={{ color: "#be123c", marginTop: 0 }}>Forecasted lot busyness (API)</h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
           Data from <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> — same fields as
-          the backend JSON.
+          the backend JSON, estimated for {forecastContext.label} using historical snapshots.
         </p>
 
         {apiLoading && <p style={{ color: "#64748b" }}>Loading…</p>}
@@ -282,10 +296,10 @@ export default function App() {
                   <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot name</th>
                   <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Zone</th>
                   <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
-                    Occupancy %
+                    Expected occupancy %
                   </th>
                   <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
-                    Latest snapshot
+                    Latest supporting snapshot
                   </th>
                 </tr>
               </thead>
@@ -327,9 +341,9 @@ export default function App() {
         }}
       >
         {[
-          ["Open Lots", stats.open, "#2563eb"],
+          ["Light Forecast", stats.light, "#2563eb"],
           ["Busy Lots", stats.busy, "#22c55e"],
-          ["Nearly Full", stats.full, "#eab308"],
+          ["Heavy Forecast", stats.heavy, "#eab308"],
           ["Your Access", availableLots.length, "#be123c"],
         ].map(([title, value, color]) => (
           <div
@@ -366,13 +380,13 @@ export default function App() {
             border: "2px solid #fecdd3",
           }}
         >
-          <h2 style={{ marginTop: 0, color: "#be123c" }}>Best Suggested Lot</h2>
+          <h2 style={{ marginTop: 0, color: "#be123c" }}>Predicted Best Lot</h2>
           <h3 style={{ marginBottom: 8 }}>
             {bestLot.lotName} ({bestLot.lotCode})
           </h3>
 
           <p style={{ color: "#475569" }}>
-            Occupancy:{" "}
+            Expected occupancy:{" "}
             {bestLot.occupancyPercent === null
               ? "Unknown"
               : `${bestLot.occupancyPercent}%`}{" "}
@@ -380,7 +394,7 @@ export default function App() {
           </p>
 
           <p style={{ color: "#16a34a", fontWeight: 600 }}>
-            Lowest current occupancy in your selected access category.
+            Lowest forecasted occupancy in your selected access category, based on historical patterns.
           </p>
         </div>
       )}
@@ -397,8 +411,8 @@ export default function App() {
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>Ask the AI</h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Questions go to <code>POST /api/parking/ask</code>: lot occupancy and recommendations use the
-          app's database; permit and policy questions use Marist's official Parking FAQ when matched.
+          Questions go to <code>POST /api/parking/ask</code>: lot forecasts and recommendations use stored
+          historical snapshots; permit and policy questions use Marist's official Parking FAQ when matched.
           Time-based parking questions may also include optional advisory context from Marist's official
           athletics composite schedule.
         </p>
@@ -412,7 +426,7 @@ export default function App() {
                 void submitAsk();
               }
             }}
-            placeholder="Try: best faculty lot right now?"
+            placeholder="Try: which faculty lot is usually best around 11am?"
             style={{
               flex: 1,
               minWidth: 260,
@@ -504,7 +518,7 @@ export default function App() {
         }}
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>
-          Available Parking Lots
+          Parking Lots and Forecast Snapshot
         </h2>
 
         {availableLots.map((lot) => {
@@ -564,7 +578,7 @@ export default function App() {
               >
                 <span>Zone: {lot.zoneType}</span>
                 <span>
-                  Snapshot:{" "}
+                  Historical sample:{" "}
                   {lot.latestSnapshotTime === null
                     ? "—"
                     : new Date(lot.latestSnapshotTime).toLocaleString()}
