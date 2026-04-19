@@ -72,16 +72,20 @@ export default function App() {
         const zoneByCode = new Map<string, string>(
           lotRows.map((row: ParkingLotListItem) => [row.lotCode, row.zoneType]),
         );
-        const merged: LiveParkingLot[] = summaryRows.map((row: ParkingLotSummary) => ({
-          ...row,
-          zoneType: zoneByCode.get(row.lotCode) ?? row.zoneType,
-        }));
+        const merged: LiveParkingLot[] = summaryRows.map(
+          (row: ParkingLotSummary) => ({
+            ...row,
+            zoneType: zoneByCode.get(row.lotCode) ?? row.zoneType,
+          }),
+        );
         if (!cancelled) {
           setApiLots(merged);
         }
       } catch (err) {
         if (!cancelled) {
-          setApiError(err instanceof Error ? err.message : "Could not load summary");
+          setApiError(
+            err instanceof Error ? err.message : "Could not load summary",
+          );
           setApiLots(null);
         }
       } finally {
@@ -104,7 +108,9 @@ export default function App() {
   }, [user]);
 
   const availableLots = useMemo(() => {
-    return (apiLots ?? []).filter((lot) => allowedZones.has(lot.zoneType.toLowerCase()));
+    return (apiLots ?? []).filter((lot) =>
+      allowedZones.has(lot.zoneType.toLowerCase()),
+    );
   }, [allowedZones, apiLots]);
 
   const stats = useMemo(() => {
@@ -145,10 +151,14 @@ export default function App() {
       const response = await askParking(question);
       setAskResult(response);
       requestAnimationFrame(() => {
-        document.getElementById("ask-result")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        document
+          .getElementById("ask-result")
+          ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     } catch (err) {
-      setAskError(err instanceof Error ? err.message : "Could not get an answer");
+      setAskError(
+        err instanceof Error ? err.message : "Could not get an answer",
+      );
     } finally {
       setAskLoading(false);
     }
@@ -164,7 +174,6 @@ export default function App() {
         color: "#111827",
       }}
     >
-      {/* HEADER */}
       <div
         style={{
           background: "white",
@@ -178,15 +187,40 @@ export default function App() {
           <img src={logo} alt="Marist" style={{ height: 55 }} />
 
           <div>
-            <h1 style={{ margin: 0, color: "#be123c" }}>
+            <h1
+              style={{
+                margin: 0,
+                color: "#be123c",
+                fontSize: 28,
+                fontWeight: 800,
+                letterSpacing: "-0.5px",
+              }}
+            >
               Campus Parking Finder
             </h1>
-            <p style={{ margin: 0, color: "#6b7280" }}>
-              Live statistics • Smart recommendations • {clock}
+
+            <p
+              style={{
+                margin: "4px 0 0 0",
+                color: "#475569",
+                fontSize: 15,
+                fontWeight: 500,
+              }}
+            >
+              Live Statistics • Smart Recommendations • {clock}
             </p>
-          <p style={{ margin: "8px 0 0 0", color: "#94a3b8", fontSize: 12 }}>
-            Time toggles are visual only right now; backend currently stores latest real snapshots.
-          </p>
+
+            <p
+              style={{
+                margin: "8px 0 0 0",
+                color: "#94a3b8",
+                fontSize: 12,
+                fontStyle: "italic",
+              }}
+            >
+              Time toggles are visual only; backend currently stores latest real
+              snapshots.
+            </p>
           </div>
         </div>
 
@@ -199,17 +233,17 @@ export default function App() {
             flexWrap: "wrap",
           }}
         >
-          {["resident", "commuter", "faculty", "visitor"].map((u) => (
+          {["Resident", "Commuter", "Faculty", "Visitor"].map((u) => (
             <button
               key={u}
-              onClick={() => setUser(u as UserType)}
+              onClick={() => setUser(u.toLowerCase() as UserType)}
               style={{
                 padding: "10px 16px",
                 border: "none",
                 borderRadius: 10,
                 cursor: "pointer",
-                background: user === u ? "#be123c" : "#f1f5f9",
-                color: user === u ? "white" : "#111827",
+                background: user === u.toLowerCase() ? "#be123c" : "#f1f5f9",
+                color: user === u.toLowerCase() ? "white" : "#111827",
                 fontWeight: 600,
               }}
             >
@@ -217,23 +251,26 @@ export default function App() {
             </button>
           ))}
 
-          {["now", "1h", "2h"].map((t) => (
-            <button
-              key={t}
-              onClick={() => setTime(t as TimeView)}
-              style={{
-                padding: "10px 16px",
-                border: "none",
-                borderRadius: 10,
-                cursor: "pointer",
-                background: time === t ? "#be123c" : "#f1f5f9",
-                color: time === t ? "white" : "#111827",
-                fontWeight: 600,
-              }}
-            >
-              {t}
-            </button>
-          ))}
+          {["Now", "1 Hour", "2 Hours"].map((t, i) => {
+            const raw = ["now", "1h", "2h"][i];
+            return (
+              <button
+                key={t}
+                onClick={() => setTime(raw as TimeView)}
+                style={{
+                  padding: "10px 16px",
+                  border: "none",
+                  borderRadius: 10,
+                  cursor: "pointer",
+                  background: time === raw ? "#be123c" : "#f1f5f9",
+                  color: time === raw ? "white" : "#111827",
+                  fontWeight: 600,
+                }}
+              >
+                {t}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -247,25 +284,37 @@ export default function App() {
           marginBottom: 24,
         }}
       >
-        <h2 style={{ color: "#be123c", marginTop: 0 }}>Live lot summary (API)</h2>
+        <h2 style={{ color: "#be123c", marginTop: 0 }}>
+          Live lot summary (API)
+        </h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Data from <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> — same fields as
-          the backend JSON.
+          Data from{" "}
+          <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> — same
+          fields as the backend JSON.
         </p>
 
         {apiLoading && <p style={{ color: "#64748b" }}>Loading…</p>}
         {apiError && (
           <p style={{ color: "#b91c1c", fontWeight: 600 }}>
             {apiError}
-            <span style={{ display: "block", fontWeight: 400, fontSize: 14, marginTop: 8 }}>
-              Start the server on port 3001 (see <code>server/README.md</code>) and use{" "}
-              <code>npm run dev</code> here so Vite can proxy <code>/api</code>, or set{" "}
-              <code>VITE_API_BASE_URL</code>.
+            <span
+              style={{
+                display: "block",
+                fontWeight: 400,
+                fontSize: 14,
+                marginTop: 8,
+              }}
+            >
+              Start the server on port 3001 (see <code>server/README.md</code>)
+              and use <code>npm run dev</code> here so Vite can proxy{" "}
+              <code>/api</code>, or set <code>VITE_API_BASE_URL</code>.
             </span>
           </p>
         )}
         {!apiLoading && !apiError && apiLots && apiLots.length === 0 && (
-          <p style={{ color: "#64748b" }}>No lots returned yet (empty database or no rows).</p>
+          <p style={{ color: "#64748b" }}>
+            No lots returned yet (empty database or no rows).
+          </p>
         )}
         {!apiLoading && !apiError && apiLots && apiLots.length > 0 && (
           <div style={{ overflowX: "auto" }}>
@@ -278,13 +327,44 @@ export default function App() {
             >
               <thead>
                 <tr style={{ textAlign: "left", color: "#64748b" }}>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot code</th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot name</th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Zone</th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Lot code
+                  </th>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Lot name
+                  </th>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Zone
+                  </th>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
                     Occupancy %
                   </th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
                     Latest snapshot
                   </th>
                 </tr>
@@ -292,19 +372,46 @@ export default function App() {
               <tbody>
                 {apiLots.map((row) => (
                   <tr key={row.lotCode}>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.lotCode}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.lotName}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.zoneType}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
-                      {row.occupancyPercent === null ? "—" : `${row.occupancyPercent}%`}
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
+                      {row.occupancyPercent === null
+                        ? "—"
+                        : `${row.occupancyPercent}%`}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.latestSnapshotTime === null
                         ? "—"
                         : new Date(row.latestSnapshotTime).toLocaleString()}
@@ -397,8 +504,9 @@ export default function App() {
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>Ask the AI</h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Questions go to <code>POST /api/parking/ask</code>: lot occupancy and recommendations use the
-          app's database; permit and policy questions use Marist's official Parking FAQ when matched.
+          Questions go to <code>POST /api/parking/ask</code>: lot occupancy and
+          recommendations use the app's database; permit and policy questions
+          use Marist's official Parking FAQ when matched.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
@@ -436,7 +544,9 @@ export default function App() {
             {askLoading ? "Asking..." : "Ask"}
           </button>
         </div>
-        {askError && <p style={{ color: "#b91c1c", marginBottom: 0 }}>{askError}</p>}
+        {askError && (
+          <p style={{ color: "#b91c1c", marginBottom: 0 }}>{askError}</p>
+        )}
         {askResult && (
           <div
             id="ask-result"
@@ -448,7 +558,14 @@ export default function App() {
               border: "1px solid #e2e8f0",
             }}
           >
-            <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#64748b", fontWeight: 600 }}>
+            <p
+              style={{
+                margin: "0 0 8px 0",
+                fontSize: 12,
+                color: "#64748b",
+                fontWeight: 600,
+              }}
+            >
               Intent: {askResult.intent}
             </p>
             <p style={{ margin: 0, color: "#334155", whiteSpace: "pre-wrap" }}>
@@ -457,14 +574,17 @@ export default function App() {
                 : askResult.answer}
             </p>
             {askResult.sourceUrl && (
-              <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
+              <p
+                style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}
+              >
                 {askResult.sourceTitle ?? "Source"}:{" "}
                 <a href={askResult.sourceUrl} target="_blank" rel="noreferrer">
                   {askResult.sourceUrl}
                 </a>
                 {askResult.lastCheckedAt && (
                   <span style={{ display: "block", marginTop: 4 }}>
-                    FAQ text last fetched: {new Date(askResult.lastCheckedAt).toLocaleString()}
+                    FAQ text last fetched:{" "}
+                    {new Date(askResult.lastCheckedAt).toLocaleString()}
                   </span>
                 )}
               </p>
@@ -508,8 +628,17 @@ export default function App() {
                 <strong>
                   {lot.lotName} ({lot.lotCode})
                 </strong>
-                <strong style={{ color: occupancyFraction === null ? "#64748b" : getColor(occupancyFraction) }}>
-                  {lot.occupancyPercent === null ? "Unknown" : `${lot.occupancyPercent}%`}
+                <strong
+                  style={{
+                    color:
+                      occupancyFraction === null
+                        ? "#64748b"
+                        : getColor(occupancyFraction),
+                  }}
+                >
+                  {lot.occupancyPercent === null
+                    ? "Unknown"
+                    : `${lot.occupancyPercent}%`}
                 </strong>
               </div>
 
