@@ -13,10 +13,14 @@ const TRAILING_SLASH = /\/$/;
  */
 export function getApiBaseUrl(): string {
   const raw = import.meta.env.VITE_API_BASE_URL;
-  if (raw === undefined || raw === null || String(raw).trim() === "") {
+  if (raw === undefined || raw === null) {
     return "";
   }
-  return String(raw).replace(TRAILING_SLASH, "");
+  const s = String(raw).trim();
+  if (s === "" || s === "undefined" || s === "null") {
+    return "";
+  }
+  return s.replace(TRAILING_SLASH, "");
 }
 
 /** One row from `GET /api/parking/summary` (matches backend JSON field names). */
@@ -36,11 +40,24 @@ export interface ParkingLotListItem {
   zoneType: string;
 }
 
+/** Optional citation when the answer comes from the official Marist Parking FAQ. */
+export interface ParkingAskSourceRef {
+  title: string;
+  url: string;
+}
+
 /** JSON shape from `POST /api/parking/ask`. */
 export interface ParkingAskResponse {
   intent: string;
   answer: string;
   data?: unknown;
+  /** Present for `parking_rules_faq` intent. */
+  sourceType?: string;
+  sourceTitle?: string;
+  sourceUrl?: string;
+  lastCheckedAt?: string | null;
+  sources?: ParkingAskSourceRef[];
+  note?: string;
 }
 
 /**
@@ -101,14 +118,30 @@ export async function askParking(question: string): Promise<ParkingAskResponse> 
     throw new Error(`Request failed (${res.status} ${res.statusText})`);
   }
 
-  const data: unknown = await res.json();
-  if (
-    typeof data !== "object" ||
-    data === null ||
-    !("intent" in data) ||
-    !("answer" in data)
-  ) {
-    throw new Error("Expected a JSON object from /api/parking/ask");
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error("Invalid JSON from /api/parking/ask (is the API URL correct?)");
   }
-  return data as ParkingAskResponse;
+  if (typeof data !== "object" || data === null || !("intent" in data)) {
+    throw new Error("Expected a JSON object with intent from /api/parking/ask");
+  }
+  const body = data as Record<string, unknown>;
+  const intent = body.intent;
+  if (typeof intent !== "string") {
+    throw new Error("Expected intent string from /api/parking/ask");
+  }
+  const rawAnswer = body.answer;
+  const answer =
+    typeof rawAnswer === "string"
+      ? rawAnswer
+      : rawAnswer === null || rawAnswer === undefined
+        ? ""
+        : String(rawAnswer);
+  return {
+    ...(data as ParkingAskResponse),
+    intent,
+    answer,
+  };
 }

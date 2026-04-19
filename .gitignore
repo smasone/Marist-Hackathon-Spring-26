@@ -52,5 +52,9 @@ temp/
 # Jest / test artifacts
 .junit.xml
 
-# Joanna
-design-docs/
+# Joanna — ignore design-docs except the tracked current-build summary
+design-docs/*
+!design-docs/design-doc-current-build.md
+
+# Cached copy of the public Marist Parking FAQ (generated at runtime)
+server/data/marist-parking-faq-cache.json

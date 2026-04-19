@@ -26,3 +26,13 @@ The Vite + React UI lives in **`frontend/`**.
 
 - **Run:** `cd frontend && npm install && npm run dev` (with the backend running; Vite proxies **`/api`** to port **3001** by default).
 - **Env:** optional **`VITE_API_BASE_URL`** — see **`frontend/.env.example`** and **`frontend/README.md`**.
+
+## Data sources: what is demo vs official
+
+Most of the parking **occupancy**, **lot list**, **busy-before-9**, and **recommendation** behavior in this project uses **demo / seeded data** in Postgres (see **`server/README.md`** and the seed script). That data is useful for the hackathon and for tests, but it is **not** live campus instrumentation.
+
+**Parking permits, fees, shuttle, and written parking policies** for the Ask feature are grounded in a **real, official** public source: Marist’s **[Parking FAQ](https://www.marist.edu/security/parking/faq)**. The backend downloads that page (on demand and on server start), stores a simplified plain-text cache under `server/data/` (see `officialParkingRulesService`), and answers matching “rules / permit” style questions only from retrieved FAQ excerpts. Optional OpenAI wording still must stay within those excerpts.
+
+**Important:** Always treat occupancy charts and “best lot” suggestions as **demo-backed**, and double-check any **policy or fee** answer on the live FAQ or Marist Parking pages if the stakes are high.
+
+A concise engineering summary also lives in **`design-docs/design-doc-current-build.md`**.

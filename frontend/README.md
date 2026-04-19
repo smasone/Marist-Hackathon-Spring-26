@@ -6,8 +6,8 @@ This template provides a minimal setup to get React working in Vite with HMR and
 
 1. In **`server/`**: configure **`.env`**, run **`npm run dev`** (default API port **3001** — see `server/README.md`).
 2. In **`frontend/`**: **`npm install`** then **`npm run dev`**.
-3. The Vite dev server **proxies `/api/*` to `http://127.0.0.1:3001`**, so the UI can call **`/api/parking/summary`** without extra CORS setup.
-4. Optional: copy **`.env.example`** to **`.env`** and set **`VITE_API_BASE_URL`** if the API is not proxied (e.g. production or a custom port you wire manually).
+3. The Vite dev server **proxies `/api/*` to `http://127.0.0.1:3001`**, so the UI can call **`/api/parking/summary`** without extra CORS setup. The same proxy applies to **`npm run preview`** so built assets still reach the backend.
+4. Optional: copy **`.env.example`** to **`.env`** and set **`VITE_API_BASE_URL`** (e.g. `http://127.0.0.1:3001`) when the UI is not served by Vite. The backend allows **CORS** from `localhost` / `127.0.0.1` so the browser can call the API directly.
 
 The app now uses backend parking endpoints for:
 - lot list + summary rendering
