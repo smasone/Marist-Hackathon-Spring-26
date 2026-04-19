@@ -261,6 +261,9 @@ function parseZonesFromQuestion(question: string): string[] {
   if (question.includes("visitor")) {
     zones.push("visitor");
   }
+  // Recommendation filtering currently uses umbrella zone buckets:
+  // - student (resident + commuter), faculty, visitor.
+  // So commuter/resident wording intentionally maps to "student".
   if (
     question.includes("student") ||
     question.includes("commuter") ||
@@ -269,6 +272,65 @@ function parseZonesFromQuestion(question: string): string[] {
     zones.push("student");
   }
   return zones;
+}
+
+function extractLotSearchText(normalizedQuestion: string): string | null {
+  const cleaned = normalizedQuestion
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return null;
+  }
+  const stopWords = new Set([
+    "what",
+    "which",
+    "where",
+    "should",
+    "is",
+    "are",
+    "the",
+    "a",
+    "an",
+    "best",
+    "recommend",
+    "recommended",
+    "parking",
+    "lot",
+    "lots",
+    "for",
+    "to",
+    "at",
+    "around",
+    "near",
+    "by",
+    "on",
+    "in",
+    "me",
+    "my",
+    "usually",
+    "right",
+    "now",
+    "today",
+    "tomorrow",
+    "noon",
+    "morning",
+    "afternoon",
+    "evening",
+    "commuter",
+    "resident",
+    "student",
+    "faculty",
+    "visitor",
+  ]);
+  const filtered = cleaned
+    .split(" ")
+    .filter((token) => token.length >= 2 && !stopWords.has(token));
+  if (filtered.length === 0) {
+    return null;
+  }
+  return filtered.join(" ");
 }
 
 /** Truncated single-line question for debug logs only. */
@@ -393,6 +455,16 @@ function appendAthleticsSuffix(base: string, athletics: AthleticsAskSupplement):
     return base;
   }
   return `${base.trimEnd()} ${tail}`;
+}
+
+async function resolveMentionedLotFromQuestion(
+  normalizedQuestion: string
+): Promise<Awaited<ReturnType<typeof ParkingAnalyticsService.findBestLotNameMatch>>> {
+  const lotHint = extractLotSearchText(normalizedQuestion);
+  if (!lotHint) {
+    return null;
+  }
+  return ParkingAnalyticsService.findBestLotNameMatch(lotHint);
 }
 
 const RULES_FAQ_GROUNDING_NOTE =
@@ -800,6 +872,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       normalizedQuestion.includes("where should")
     ) {
       console.log("[ask] routed intent=recommendation", { zones });
+      const lotNameMatch = await resolveMentionedLotFromQuestion(normalizedQuestion);
       const inferredInstant = inferReferenceInstantFromQuestion(question);
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
         targetHour: inferredInstant?.at.getHours() ?? null,
@@ -821,8 +894,25 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         recommendation,
         inferredInstant
       );
+      if (lotNameMatch) {
+        supportingDetails.push(
+          `Matched lot reference: ${lotNameMatch.lotName} (${lotNameMatch.matchType} match on ${lotNameMatch.matchSource === "lotName" ? "lot name" : "alt name"}).`
+        );
+      }
       const facts = {
         zonesRequested: zones,
+        lotNameMatch:
+          lotNameMatch === null
+            ? null
+            : {
+                lotId: lotNameMatch.lotId,
+                lotCode: lotNameMatch.lotCode,
+                lotName: lotNameMatch.lotName,
+                altName: lotNameMatch.altName,
+                matchSource: lotNameMatch.matchSource,
+                matchType: lotNameMatch.matchType,
+                score: lotNameMatch.score,
+              },
         forecastContext: inferredInstant?.at.toISOString() ?? null,
         selectedLot: {
           lotCode: recommendation.lotCode,
@@ -868,6 +958,18 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           selectionReason: recommendation.reason,
           sampleCount: recommendation.sampleCount,
           latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+          lotNameMatch:
+            lotNameMatch === null
+              ? null
+              : {
+                  lotId: lotNameMatch.lotId,
+                  lotCode: lotNameMatch.lotCode,
+                  lotName: lotNameMatch.lotName,
+                  altName: lotNameMatch.altName,
+                  matchSource: lotNameMatch.matchSource,
+                  matchType: lotNameMatch.matchType,
+                  score: lotNameMatch.score,
+                },
         },
         data: recommendation,
         ...athleticsSupplementToResponseFields(athletics),
@@ -985,6 +1087,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     ) {
       console.log("[ask] routed intent=recommendation (time-based parking context)");
       const zones = parseZonesFromQuestion(normalizedQuestion);
+      const lotNameMatch = await resolveMentionedLotFromQuestion(normalizedQuestion);
       const inferredInstant = inferReferenceInstantFromQuestion(question);
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
         targetHour: inferredInstant?.at.getHours() ?? null,
@@ -1020,8 +1123,25 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         recommendation,
         inferredInstant
       );
+      if (lotNameMatch) {
+        supportingDetailsTime.push(
+          `Matched lot reference: ${lotNameMatch.lotName} (${lotNameMatch.matchType} match on ${lotNameMatch.matchSource === "lotName" ? "lot name" : "alt name"}).`
+        );
+      }
       const factsTime = {
         zonesRequested: zones,
+        lotNameMatch:
+          lotNameMatch === null
+            ? null
+            : {
+                lotId: lotNameMatch.lotId,
+                lotCode: lotNameMatch.lotCode,
+                lotName: lotNameMatch.lotName,
+                altName: lotNameMatch.altName,
+                matchSource: lotNameMatch.matchSource,
+                matchType: lotNameMatch.matchType,
+                score: lotNameMatch.score,
+              },
         forecastContext: inferredInstant?.at.toISOString() ?? null,
         selectedLot: {
           lotCode: recommendation.lotCode,
@@ -1067,6 +1187,18 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           selectionReason: recommendation.reason,
           sampleCount: recommendation.sampleCount,
           latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+          lotNameMatch:
+            lotNameMatch === null
+              ? null
+              : {
+                  lotId: lotNameMatch.lotId,
+                  lotCode: lotNameMatch.lotCode,
+                  lotName: lotNameMatch.lotName,
+                  altName: lotNameMatch.altName,
+                  matchSource: lotNameMatch.matchSource,
+                  matchType: lotNameMatch.matchType,
+                  score: lotNameMatch.score,
+                },
         },
         data: recommendation,
         ...athleticsSupplementToResponseFields(athleticsTime),

@@ -147,6 +147,25 @@ describe("POST /api/parking/ask", () => {
     );
   });
 
+  it("adds lot match metadata when question uses partial lot name wording", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "What is the best lot near North Campus around noon?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.intent).toBe("recommendation");
+    expect(res.body.recommendationMeta).toEqual(
+      expect.objectContaining({
+        lotNameMatch: expect.objectContaining({
+          lotName: expect.stringContaining("North Campus"),
+          matchSource: expect.any(String),
+          matchType: expect.any(String),
+          score: expect.any(Number),
+        }),
+      })
+    );
+  });
+
   it("returns busy_before_nine with rows array and answer", async () => {
     const res = await request(app)
       .post("/api/parking/ask")
