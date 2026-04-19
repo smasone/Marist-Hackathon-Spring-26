@@ -22,7 +22,7 @@ describe("POST /api/parking/ask (OpenAI phrasing throws)", () => {
   it("returns 200 and a deterministic DB-backed answer for recommendation", async () => {
     const res = await request(app)
       .post("/api/parking/ask")
-      .send({ question: "What is the best lot right now?" });
+      .send({ question: "What lot is usually best around 11am?" });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(
@@ -38,6 +38,6 @@ describe("POST /api/parking/ask (OpenAI phrasing throws)", () => {
         }),
       })
     );
-    expect(String(res.body.answer)).toMatch(/Best current option/i);
+    expect(String(res.body.answer)).toMatch(/Predicted best option/i);
   });
 });

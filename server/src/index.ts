@@ -3,6 +3,7 @@
  */
 import { app } from "./app";
 import { env } from "./config/env";
+import { warmAthleticsScheduleCache } from "./services/maristAthleticsScheduleService";
 import { warmOfficialParkingFaqCache } from "./services/officialParkingRulesService";
 
 /**
@@ -16,6 +17,9 @@ function startServer(): void {
 
   void warmOfficialParkingFaqCache().catch((err) => {
     console.error("[faq] warmOfficialParkingFaqCache failed (non-fatal):", err);
+  });
+  void warmAthleticsScheduleCache().catch((err) => {
+    console.error("[athletics] warmAthleticsScheduleCache failed (non-fatal):", err);
   });
 }
 

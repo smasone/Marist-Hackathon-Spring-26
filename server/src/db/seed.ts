@@ -1,11 +1,6 @@
-/**
- * Inserts deterministic fake parking data for demos and local testing.
- * Safe to re-run: removes prior rows for the same seed lot codes, then inserts fresh rows.
- */
 import { closePool, getPool } from "./client";
 
-/** Lot codes used only by this seed script (avoid clashing with manual DB edits). */
-const SEED_LOT_CODES = ["DEMO-N-01", "DEMO-S-02", "DEMO-E-03"] as const;
+const SEED_LOT_IDS = [9001, 9002, 9003] as const;
 
 /**
  * Deletes existing seed rows and inserts sample lots and snapshots inside a transaction.
@@ -19,65 +14,66 @@ async function seed(): Promise<void> {
   try {
     await client.query("BEGIN");
 
-    // Remove old seed snapshots and lots so re-runs do not duplicate rows.
     await client.query(
       `
-      DELETE FROM parking_snapshots
-      WHERE lot_id IN (
-        SELECT id FROM parking_lots WHERE lot_code = ANY($1::text[])
+      DELETE FROM history
+      WHERE spacenum IN (
+        SELECT spacenum FROM spaces WHERE lotid = ANY($1::int[])
       );
       `,
-      [SEED_LOT_CODES]
+      [SEED_LOT_IDS]
     );
-    await client.query(
-      `DELETE FROM parking_lots WHERE lot_code = ANY($1::text[]);`,
-      [SEED_LOT_CODES]
-    );
+    await client.query(`DELETE FROM spaces WHERE lotid = ANY($1::int[]);`, [SEED_LOT_IDS]);
+    await client.query(`DELETE FROM lots WHERE lotid = ANY($1::int[]);`, [SEED_LOT_IDS]);
 
     await client.query(
       `
-      INSERT INTO parking_lots (lot_code, lot_name, zone_type)
+      INSERT INTO lots (
+        lotid,
+        lotname,
+        altname,
+        allowsresidents,
+        allowscommuters,
+        allowsfaculty,
+        allowsvisitors
+      )
       VALUES
-        ('DEMO-N-01', 'North Campus Lot', 'student'),
-        ('DEMO-S-02', 'South Field Lot', 'faculty'),
-        ('DEMO-E-03', 'East Visitor Lot', 'visitor');
+        (9001, 'North Campus Lot', 'DEMO-N-01', true, true, false, false),
+        (9002, 'South Field Lot', 'DEMO-S-02', false, false, true, false),
+        (9003, 'East Visitor Lot', 'DEMO-E-03', false, false, false, true);
       `
     );
 
-    const lots = await client.query<{ id: number; lot_code: string }>(
-      `SELECT id, lot_code FROM parking_lots WHERE lot_code = ANY($1::text[]) ORDER BY lot_code;`,
-      [SEED_LOT_CODES]
-    );
-
-    const idByCode = new Map(
-      lots.rows.map((row) => [row.lot_code, row.id] as const)
-    );
-
-    const northId = idByCode.get("DEMO-N-01");
-    const southId = idByCode.get("DEMO-S-02");
-    const eastId = idByCode.get("DEMO-E-03");
-
-    if (northId === undefined || southId === undefined || eastId === undefined) {
-      throw new Error("Seed failed: could not resolve inserted lot IDs.");
-    }
-
-    // Sample snapshots: some before 9:00 local time for analytics demos (busy lots before 9 AM).
     await client.query(
       `
-      INSERT INTO parking_snapshots (lot_id, occupancy_percent, snapshot_at)
+      INSERT INTO spaces (spacenum, lotid, ishandicap)
+      SELECT gs, 9001, (gs % 10 = 0) FROM generate_series(91001, 91080) AS gs
+      UNION ALL
+      SELECT gs, 9002, (gs % 12 = 0) FROM generate_series(92001, 92060) AS gs
+      UNION ALL
+      SELECT gs, 9003, (gs % 8 = 0) FROM generate_series(93001, 93040) AS gs;
+      `
+    );
+
+    await client.query(
+      `
+      INSERT INTO history (spacenum, entrancetime, exittime)
       VALUES
-        ($1, 92.5, TIMESTAMPTZ '2026-04-10 07:30:00-04'),
-        ($1, 95.0, TIMESTAMPTZ '2026-04-11 08:15:00-04'),
-        ($2, 88.0, TIMESTAMPTZ '2026-04-10 07:45:00-04'),
-        ($2, 91.0, TIMESTAMPTZ '2026-04-12 08:00:00-04'),
-        ($3, 40.0, TIMESTAMPTZ '2026-04-10 10:00:00-04'),
-        ($3, 35.0, TIMESTAMPTZ '2026-04-11 11:30:00-04');
-      `,
-      [northId, southId, eastId]
+        (91001, TIMESTAMP '2026-04-10 07:10:00', TIMESTAMP '2026-04-10 10:20:00'),
+        (91002, TIMESTAMP '2026-04-10 07:30:00', TIMESTAMP '2026-04-10 09:45:00'),
+        (91003, TIMESTAMP '2026-04-11 08:00:00', TIMESTAMP '2026-04-11 10:50:00'),
+        (91004, TIMESTAMP '2026-04-12 08:25:00', TIMESTAMP '2026-04-12 11:00:00'),
+        (92001, TIMESTAMP '2026-04-10 07:40:00', TIMESTAMP '2026-04-10 12:05:00'),
+        (92002, TIMESTAMP '2026-04-11 08:10:00', TIMESTAMP '2026-04-11 11:40:00'),
+        (92003, TIMESTAMP '2026-04-12 09:15:00', TIMESTAMP '2026-04-12 12:00:00'),
+        (93001, TIMESTAMP '2026-04-10 10:00:00', TIMESTAMP '2026-04-10 13:00:00'),
+        (93002, TIMESTAMP '2026-04-11 11:30:00', TIMESTAMP '2026-04-11 14:10:00'),
+        (93003, TIMESTAMP '2026-04-12 12:20:00', TIMESTAMP '2026-04-12 15:00:00');
+      `
     );
 
     await client.query("COMMIT");
-    console.log("Seed data inserted for codes:", SEED_LOT_CODES.join(", "));
+    console.log("Seed data inserted for lot IDs:", SEED_LOT_IDS.join(", "));
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

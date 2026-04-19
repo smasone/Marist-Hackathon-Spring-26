@@ -11,7 +11,7 @@ This template provides a minimal setup to get React working in Vite with HMR and
 
 The app now uses backend parking endpoints for:
 - lot list + summary rendering
-- recommendation card logic (lowest live occupancy for selected access type)
+- recommendation card logic (lowest forecasted occupancy for selected access type and time context)
 - "Ask the AI" requests via `POST /api/parking/ask`
 
 ---

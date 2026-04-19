@@ -30,6 +30,7 @@ export interface ParkingLotSummary {
   zoneType: string;
   occupancyPercent: number | null;
   latestSnapshotTime: string | null;
+  sampleCount?: number;
 }
 
 /** One row from `GET /api/parking/lots`. */
@@ -58,6 +59,13 @@ export interface ParkingAskResponse {
   lastCheckedAt?: string | null;
   sources?: ParkingAskSourceRef[];
   note?: string;
+  /** Optional official athletics schedule advisory (occupancy intents, time-shaped questions). */
+  eventSignalFound?: boolean;
+  eventImpactNote?: string | null;
+  eventSnippet?: string | null;
+  eventTitle?: string | null;
+  eventTime?: string | null;
+  eventSources?: ParkingAskSourceRef[];
 }
 
 /**
@@ -66,9 +74,20 @@ export interface ParkingAskResponse {
  * @returns Parsed JSON array from the backend.
  * @throws On non-OK HTTP status or invalid JSON.
  */
-export async function fetchParkingSummary(): Promise<ParkingLotSummary[]> {
+export async function fetchParkingSummary(params?: {
+  hour?: number;
+  dayOfWeek?: number;
+}): Promise<ParkingLotSummary[]> {
   const base = getApiBaseUrl();
-  const url = `${base}/api/parking/summary`;
+  const search = new URLSearchParams();
+  if (params?.hour !== undefined) {
+    search.set("hour", String(params.hour));
+  }
+  if (params?.dayOfWeek !== undefined) {
+    search.set("dayOfWeek", String(params.dayOfWeek));
+  }
+  const suffix = search.toString();
+  const url = `${base}/api/parking/summary${suffix ? `?${suffix}` : ""}`;
   const res = await fetch(url);
 
   if (!res.ok) {

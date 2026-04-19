@@ -58,3 +58,6 @@ design-docs/*
 
 # Cached copy of the public Marist Parking FAQ (generated at runtime)
 server/data/marist-parking-faq-cache.json
+
+# Cached official Marist athletics composite schedule JSON (generated at runtime)
+server/data/marist-athletics-schedule-cache.json

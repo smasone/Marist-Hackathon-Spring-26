@@ -20,6 +20,17 @@ import {
   OFFICIAL_PARKING_FAQ_PAGE_TITLE,
   selectFaqExcerptsForQuestion,
 } from "./services/officialParkingRulesService";
+import {
+  athleticsSupplementToResponseFields,
+  computeAthleticsAskSupplementForQuestion,
+  emptyAthleticsAskSupplement,
+  type AthleticsAskSupplement,
+} from "./services/maristAthleticsScheduleService";
+import {
+  inferReferenceInstantFromQuestion,
+  mentionsCampusParkingContext,
+  shouldConsiderAthleticsSchedule,
+} from "./services/questionTimeHeuristics";
 import { ParkingAnalyticsService } from "./services/parkingAnalyticsService";
 
 const app = express();
@@ -85,7 +96,7 @@ const swaggerSpec = swaggerJsdoc({
       title: "Parking Hackathon API",
       version: "1.0.0",
       description:
-        "Reads demo parking data from Postgres (`parking_lots` + `parking_snapshots`).",
+        "Reads parking history data from Postgres (`lots` + `spaces` + `history`).",
     },
     servers: [
       {
@@ -105,7 +116,7 @@ const swaggerSpec = swaggerJsdoc({
         ParkingLotSummary: {
           type: "object",
           description:
-            "Matches `ParkingLotSummaryRow` from `ParkingAnalyticsService.getParkingLotSummaries`.",
+            "Matches `ParkingLotSummaryRow` from `ParkingAnalyticsService.getParkingLotSummaries` (historical forecast estimate).",
           properties: {
             lotCode: { type: "string" },
             lotName: { type: "string" },
@@ -120,7 +131,11 @@ const swaggerSpec = swaggerJsdoc({
               format: "date-time",
               nullable: true,
               description:
-                "ISO 8601 in JSON (Express serializes `Date` from the service).",
+                "Most recent snapshot timestamp that contributed to the estimate.",
+            },
+            sampleCount: {
+              type: "integer",
+              description: "Historical snapshot count used for this lot estimate.",
             },
           },
         },
@@ -138,7 +153,7 @@ const swaggerSpec = swaggerJsdoc({
         },
         ParkingLotListItem: {
           type: "object",
-          description: "Matches `ParkingLotRow` from `getAllLots` (`parking_lots` only).",
+          description: "Matches `ParkingLotRow` from `getAllLots` (`lots` table).",
           properties: {
             id: { type: "integer" },
             lotCode: { type: "string" },
@@ -293,6 +308,56 @@ async function parkingAnswerWithOptionalAiPhrasing(
   }
 }
 
+const DEMO_TIMELINESS_PREFIX =
+  "Forecast note: this app estimates lot busyness from stored historical snapshots, not live sensor feeds. ";
+
+function mergeFactsWithTimelinessNote(
+  facts: Record<string, unknown>
+): Record<string, unknown> {
+  const f = { ...facts };
+  f.dataTimelinessNote =
+    "Occupancy figures in FACTS are forecast estimates based on stored historical snapshots, not live parking availability.";
+  return f;
+}
+
+function parseForecastQueryContext(req: Request): {
+  targetHour: number | null;
+  targetDayOfWeek: number | null;
+} {
+  const rawHour = req.query.hour;
+  const rawDow = req.query.dayOfWeek;
+  const parsedHour =
+    rawHour === undefined ? NaN : Number(Array.isArray(rawHour) ? rawHour[0] : rawHour);
+  const parsedDow =
+    rawDow === undefined ? NaN : Number(Array.isArray(rawDow) ? rawDow[0] : rawDow);
+  return {
+    targetHour: Number.isInteger(parsedHour) && parsedHour >= 0 && parsedHour <= 23 ? parsedHour : null,
+    targetDayOfWeek:
+      Number.isInteger(parsedDow) && parsedDow >= 0 && parsedDow <= 6 ? parsedDow : null,
+  };
+}
+
+function busynessCategory(occupancyPercent: number): "light" | "moderate" | "heavy" {
+  if (occupancyPercent >= 85) {
+    return "heavy";
+  }
+  if (occupancyPercent >= 60) {
+    return "moderate";
+  }
+  return "light";
+}
+
+function appendAthleticsSuffix(base: string, athletics: AthleticsAskSupplement): string {
+  const tail = athletics.answerSuffix?.trim();
+  if (!tail) {
+    return base;
+  }
+  if (base.includes(tail)) {
+    return base;
+  }
+  return `${base.trimEnd()} ${tail}`;
+}
+
 const RULES_FAQ_GROUNDING_NOTE =
   "Answer is based only on retrieved excerpts from the official Marist Parking FAQ; confirm details on the live page if needed.";
 
@@ -430,7 +495,7 @@ app.get("/api/parking/busy-before-nine", async (req: Request, res: Response) => 
  * /api/parking/lots:
  *   get:
  *     tags: [Parking]
- *     summary: All rows in parking_lots
+ *     summary: All rows in lots
  *     responses:
  *       200:
  *         content:
@@ -457,7 +522,7 @@ app.get("/api/parking/lots", async (_req: Request, res: Response) => {
  * /api/parking/snapshots/latest:
  *   get:
  *     tags: [Parking]
- *     summary: Latest parking_snapshots row per lot_id (raw table columns)
+ *     summary: Latest history-derived snapshot row per lot_id
  *     responses:
  *       200:
  *         content:
@@ -484,7 +549,24 @@ app.get("/api/parking/snapshots/latest", async (_req: Request, res: Response) =>
  * /api/parking/summary:
  *   get:
  *     tags: [Parking]
- *     summary: Latest snapshot per lot
+ *     summary: Forecasted lot busyness from historical snapshots
+ *     parameters:
+ *       - in: query
+ *         name: hour
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           maximum: 23
+ *         description: Optional hour-of-day bucket (0-23) for historical forecast matching.
+ *       - in: query
+ *         name: dayOfWeek
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *           maximum: 6
+ *         description: Optional day-of-week bucket (0=Sun..6=Sat) for historical forecast matching.
  *     responses:
  *       200:
  *         description: One row per lot from the database
@@ -499,7 +581,8 @@ app.get("/api/parking/snapshots/latest", async (_req: Request, res: Response) =>
  */
 app.get("/api/parking/summary", async (_req: Request, res: Response) => {
   try {
-    const rows = await ParkingAnalyticsService.getParkingLotSummaries();
+    const context = parseForecastQueryContext(_req);
+    const rows = await ParkingAnalyticsService.getParkingLotSummaries(context);
     res.json(rows);
   } catch (error) {
     console.error("GET /api/parking/summary failed:", error);
@@ -558,16 +641,20 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  * /api/parking/ask:
  *   post:
  *     tags: [Parking]
- *     summary: Answers supported parking questions from DB data and/or the official Marist Parking FAQ
+ *     summary: Answers supported parking questions from historical DB forecasts and/or the official Marist Parking FAQ
  *     description: >
- *       Supported categories: (1) **Postgres occupancy** — questions containing best/recommend/where should
+ *       Supported categories: (1) **Postgres forecast** — questions containing best/recommend/where should
  *       (recommendation), busy before 9 / before nine (busy_before_nine), or list / how many / which lot
- *       (lots_list). (2) **Official FAQ** — permit, policy, shuttle, enforcement, and similar heuristics
- *       (`parking_rules_faq`) using cached plain text from https://www.marist.edu/security/parking/faq
- *       with stale on-disk fallback when the live page cannot be fetched. (3) **unsupported** — safe template
- *       when no route matches. When `OPENAI_API_KEY` is set, DB and FAQ answers may be rephrased; on missing key,
- *       HTTP/model errors, or unexpected failures, the API returns deterministic template or excerpt text so
- *       facts always come from SQL results or FAQ excerpts.
+ *       (lots_list), plus time-shaped campus parking questions routed like **recommendation** when the question
+ *       references a time/date but not the keywords above. (2) **Official FAQ** — permit, policy, shuttle,
+ *       enforcement, and similar heuristics (`parking_rules_faq`) using cached plain text from
+ *       https://www.marist.edu/security/parking/faq with stale on-disk fallback when the live page cannot be
+ *       fetched. (3) **unsupported** — safe template when no route matches. For forecast intents, when the
+ *       question looks time- or future-shaped, the server may attach **advisory** metadata from Marist's
+ *       official athletics composite schedule (`https://goredfoxes.com/calendar` / Sidearm JSON); this never
+ *       replaces SQL-backed recommendations. Forecast answers are estimates from stored historical snapshots (not live availability). When `OPENAI_API_KEY` is set, DB and FAQ answers may be rephrased;
+ *       on missing key, HTTP/model errors, or unexpected failures, the API returns deterministic template or
+ *       excerpt text so facts always come from SQL results or FAQ excerpts.
  *     requestBody:
  *       required: true
  *       content:
@@ -578,7 +665,7 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *             properties:
  *               question:
  *                 type: string
- *                 example: What is the best faculty lot right now?
+ *                 example: What lot is usually best for faculty around 11am?
  *     responses:
  *       200:
  *         content:
@@ -618,6 +705,28 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *                       url: { type: string }
  *                 note:
  *                   type: string
+ *                 eventSignalFound:
+ *                   type: boolean
+ *                   description: Present when an athletics schedule lookup ran for a time-shaped question
+ *                 eventImpactNote:
+ *                   type: string
+ *                   nullable: true
+ *                 eventSnippet:
+ *                   type: string
+ *                   nullable: true
+ *                 eventTitle:
+ *                   type: string
+ *                   nullable: true
+ *                 eventTime:
+ *                   type: string
+ *                   nullable: true
+ *                 eventSources:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       title: { type: string }
+ *                       url: { type: string }
  *       400:
  *         description: Missing/blank question, non-string question, or invalid JSON body
  *       500:
@@ -654,39 +763,67 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       normalizedQuestion.includes("where should")
     ) {
       console.log("[ask] routed intent=recommendation", { zones });
-      const recommendation = await ParkingAnalyticsService.getRecommendation(zones);
+      const inferredInstant = inferReferenceInstantFromQuestion(question);
+      const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
+        targetHour: inferredInstant?.at.getHours() ?? null,
+        targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
+      });
       if (recommendation === null) {
-        console.log("[ask] recommendation: no snapshot data for zones");
+        console.log("[ask] recommendation: no historical forecast data for zones");
         res.json({
           intent: "recommendation",
           answer:
-            "I could not find a lot with current snapshot data for that request yet.",
+            "I could not estimate a lot forecast from historical snapshots for that request yet.",
           data: null,
         });
         return;
       }
-      const fallbackAnswer = `Best current option: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`;
+      const forecastContext =
+        inferredInstant !== null
+          ? `around ${inferredInstant.at.toLocaleString()}`
+          : "for a general arrival context";
+      const fallbackAnswer = `${DEMO_TIMELINESS_PREFIX}Predicted best option ${forecastContext}: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone, with expected occupancy near ${recommendation.occupancyPercent}% (${busynessCategory(
+        recommendation.occupancyPercent
+      )} busyness). ${recommendation.reason}`;
       const facts = {
         zonesRequested: zones,
+        forecastContext: inferredInstant?.at.toISOString() ?? null,
         selectedLot: {
           lotCode: recommendation.lotCode,
           lotName: recommendation.lotName,
           zoneType: recommendation.zoneType,
           occupancyPercent: recommendation.occupancyPercent,
+          busynessCategory: busynessCategory(recommendation.occupancyPercent),
+          sampleCount: recommendation.sampleCount,
           latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
           selectionReason: recommendation.reason,
         },
       };
+      let athletics: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athletics = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athletics = emptyAthleticsAskSupplement();
+      }
+      const factsForModel = mergeFactsWithTimelinessNote(facts);
       const answer = await parkingAnswerWithOptionalAiPhrasing(
         question,
         "recommendation",
-        facts,
+        factsForModel,
         fallbackAnswer
       );
+      const finalAnswer = appendAthleticsSuffix(answer, athletics);
       res.json({
         intent: "recommendation",
-        answer,
+        answer: finalAnswer,
         data: recommendation,
+        ...athleticsSupplementToResponseFields(athletics),
       });
       return;
     }
@@ -701,8 +838,8 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       const rows = await ParkingAnalyticsService.getBusyLotsBeforeNineAm(busyThreshold);
       const fallbackAnswer =
         rows.length === 0
-          ? "No lots currently meet the 90% average occupancy threshold before 9 AM."
-          : `Before 9 AM, ${rows[0].lotName} (${rows[0].lotCode}) is the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`;
+          ? `${DEMO_TIMELINESS_PREFIX}No lots in historical snapshots meet the 90% average occupancy threshold before 9 AM.`
+          : `${DEMO_TIMELINESS_PREFIX}Before 9 AM, historical patterns suggest ${rows[0].lotName} (${rows[0].lotCode}) is typically the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`;
       const facts = {
         occupancyThresholdPercent: busyThreshold,
         matchingLots: rows.map((row) => ({
@@ -713,16 +850,31 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           sampleCount: row.sampleCount,
         })),
       };
+      let athleticsBusy: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athleticsBusy = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athleticsBusy = emptyAthleticsAskSupplement();
+      }
+      const factsBusy = mergeFactsWithTimelinessNote(facts);
       const answer = await parkingAnswerWithOptionalAiPhrasing(
         question,
         "busy_before_nine",
-        facts,
+        factsBusy,
         fallbackAnswer
       );
+      const finalAnswerBusy = appendAthleticsSuffix(answer, athleticsBusy);
       res.json({
         intent: "busy_before_nine",
-        answer,
+        answer: finalAnswerBusy,
         data: rows,
+        ...athleticsSupplementToResponseFields(athleticsBusy),
       });
       return;
     }
@@ -751,16 +903,112 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           zoneType: lot.zoneType,
         })),
       };
+      let athleticsLots: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athleticsLots = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athleticsLots = emptyAthleticsAskSupplement();
+      }
+      const factsLots = mergeFactsWithTimelinessNote(facts);
       const answer = await parkingAnswerWithOptionalAiPhrasing(
         question,
         "lots_list",
-        facts,
+        factsLots,
         fallbackAnswer
       );
+      const finalAnswerLots = appendAthleticsSuffix(answer, athleticsLots);
       res.json({
         intent: "lots_list",
-        answer,
+        answer: finalAnswerLots,
         data: lots,
+        ...athleticsSupplementToResponseFields(athleticsLots),
+      });
+      return;
+    }
+
+    if (
+      shouldConsiderAthleticsSchedule(normalizedQuestion) &&
+      mentionsCampusParkingContext(normalizedQuestion)
+    ) {
+      console.log("[ask] routed intent=recommendation (time-based parking context)");
+      const zones = parseZonesFromQuestion(normalizedQuestion);
+      const inferredInstant = inferReferenceInstantFromQuestion(question);
+      const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
+        targetHour: inferredInstant?.at.getHours() ?? null,
+        targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
+      });
+      if (recommendation === null) {
+        let athleticsOnly: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+        try {
+          athleticsOnly = await computeAthleticsAskSupplementForQuestion(
+            question,
+            normalizedQuestion
+          );
+        } catch (error) {
+          console.error("[ask] athletics supplement failed (non-fatal)", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          athleticsOnly = emptyAthleticsAskSupplement();
+        }
+        const baseNoData =
+          "I could not estimate a lot forecast from historical snapshots for that request yet.";
+        const answerNoData = appendAthleticsSuffix(baseNoData, athleticsOnly);
+        res.json({
+          intent: "recommendation",
+          answer: answerNoData,
+          data: null,
+          ...athleticsSupplementToResponseFields(athleticsOnly),
+        });
+        return;
+      }
+      const fallbackAnswerTime = `${DEMO_TIMELINESS_PREFIX}Predicted best option from stored parking history: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone, expected near ${recommendation.occupancyPercent}% occupancy (${busynessCategory(
+        recommendation.occupancyPercent
+      )} busyness). ${recommendation.reason}`;
+      const factsTime = {
+        zonesRequested: zones,
+        forecastContext: inferredInstant?.at.toISOString() ?? null,
+        selectedLot: {
+          lotCode: recommendation.lotCode,
+          lotName: recommendation.lotName,
+          zoneType: recommendation.zoneType,
+          occupancyPercent: recommendation.occupancyPercent,
+          busynessCategory: busynessCategory(recommendation.occupancyPercent),
+          sampleCount: recommendation.sampleCount,
+          latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+          selectionReason: recommendation.reason,
+        },
+      };
+      let athleticsTime: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athleticsTime = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athleticsTime = emptyAthleticsAskSupplement();
+      }
+      const factsTimeForModel = mergeFactsWithTimelinessNote(factsTime);
+      const answerTime = await parkingAnswerWithOptionalAiPhrasing(
+        question,
+        "recommendation",
+        factsTimeForModel,
+        fallbackAnswerTime
+      );
+      const finalAnswerTime = appendAthleticsSuffix(answerTime, athleticsTime);
+      res.json({
+        intent: "recommendation",
+        answer: finalAnswerTime,
+        data: recommendation,
+        ...athleticsSupplementToResponseFields(athleticsTime),
       });
       return;
     }
@@ -769,7 +1017,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     res.json({
       intent: "unsupported",
       answer:
-        "I can answer supported questions about best lot recommendations, busy-before-9 trends, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page.",
+        "I can answer supported questions about forecasted lot recommendations, busy-before-9 trends from historical snapshots, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page. Time-based campus parking questions may also receive optional advisory context from Marist's official athletics composite schedule when they clearly mention parking and a time or date.",
       data: null,
     });
   } catch (error) {
