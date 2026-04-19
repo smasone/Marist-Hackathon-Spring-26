@@ -10,7 +10,7 @@ import {
   type ParkingLotSummary,
 } from "./parkingApi";
 
-type UserType = "resident" | "commuter" | "faculty" | "visitor";
+type UserType = "all" | "resident" | "commuter" | "faculty" | "visitor";
 type TimeView = "now" | "1h" | "2h";
 interface ForecastParkingLot {
   lotCode: string;
@@ -73,8 +73,27 @@ function getDistanceRank(lot: ForecastParkingLot): number | null {
   return null;
 }
 
+function getAllowedZoneTypesForAudience(user: UserType): Set<string> | null {
+  if (user === "all") {
+    return null;
+  }
+
+  const allAudienceZoneTypes = ["all", "all_audiences", "allaudiences", "mixed"];
+
+  if (user === "resident") {
+    return new Set(["resident", "student", ...allAudienceZoneTypes]);
+  }
+  if (user === "commuter") {
+    return new Set(["commuter", "student", ...allAudienceZoneTypes]);
+  }
+  if (user === "faculty") {
+    return new Set(["faculty", ...allAudienceZoneTypes]);
+  }
+  return new Set(["visitor", ...allAudienceZoneTypes]);
+}
+
 export default function App() {
-  const [user, setUser] = useState<UserType>("commuter");
+  const [user, setUser] = useState<UserType>("all");
   const [clock, setClock] = useState("");
   const [time, setTime] = useState<TimeView>("now");
   const [apiLots, setApiLots] = useState<ForecastParkingLot[] | null>(null);
@@ -161,12 +180,7 @@ export default function App() {
     };
   }, [forecastContext.dayOfWeek, forecastContext.hour]);
 
-  const allowedZones = useMemo(() => {
-    if (user === "faculty") return new Set(["faculty"]);
-    if (user === "visitor") return new Set(["visitor"]);
-    if (user === "resident") return new Set(["resident"]);
-    return new Set(["commuter"]);
-  }, [user]);
+  const allowedZoneTypes = useMemo(() => getAllowedZoneTypesForAudience(user), [user]);
 
   const availableLots = useMemo(() => {
     const lots = apiLots ?? [];
@@ -190,8 +204,12 @@ export default function App() {
         });
     }
 
-    return lots.filter((lot) => allowedZones.has(lot.zoneType.toLowerCase()));
-  }, [allowedZones, apiLots, showAccessibleOnly]);
+    if (!allowedZoneTypes) {
+      return lots;
+    }
+
+    return lots.filter((lot) => allowedZoneTypes.has(lot.zoneType.toLowerCase()));
+  }, [allowedZoneTypes, apiLots, showAccessibleOnly]);
 
   const stats = useMemo(() => {
     let light = 0;
@@ -312,7 +330,7 @@ export default function App() {
             flexWrap: "wrap",
           }}
         >
-          {["Resident", "Commuter", "Faculty", "Visitor"].map((u) => (
+          {["All", "Resident", "Commuter", "Faculty", "Visitor"].map((u) => (
             <button
               key={u}
               onClick={() => setUser(u.toLowerCase() as UserType)}
