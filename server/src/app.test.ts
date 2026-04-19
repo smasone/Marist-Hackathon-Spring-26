@@ -7,6 +7,7 @@
  */
 import request from "supertest";
 import { app } from "./app";
+import { ParkingAnalyticsService } from "./services/parkingAnalyticsService";
 
 describe("GET /health", () => {
   it("returns 200 and a simple JSON health payload", async () => {
@@ -147,6 +148,38 @@ describe("POST /api/parking/ask", () => {
     );
   });
 
+  it("passes destination context into recommendation queries when prompt names a destination", async () => {
+    const recommendationSpy = jest
+      .spyOn(ParkingAnalyticsService, "getRecommendation")
+      .mockResolvedValueOnce({
+        lotCode: "DEMO-N-01",
+        lotName: "North Campus Lot",
+        zoneType: "student",
+        occupancyPercent: 55,
+        latestSnapshotTime: new Date("2026-04-12T12:00:00.000Z"),
+        sampleCount: 4,
+        reason: "mocked recommendation",
+      });
+
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "Where should I park to be at Donnelly by 5pm?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.intent).toBe("recommendation");
+    expect(recommendationSpy).toHaveBeenCalled();
+    expect(recommendationSpy).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        targetHour: expect.any(Number),
+        targetDayOfWeek: expect.any(Number),
+        targetBuildingName: "donnelly",
+      })
+    );
+
+    recommendationSpy.mockRestore();
+  });
+
   it("adds lot match metadata when question uses partial lot name wording", async () => {
     const res = await request(app)
       .post("/api/parking/ask")
@@ -162,6 +195,46 @@ describe("POST /api/parking/ask", () => {
           matchType: expect.any(String),
           score: expect.any(Number),
         }),
+      })
+    );
+  });
+
+  it("returns lot_specific intent for lot-focused questions and answers that lot first", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "How busy is North Campus lot around noon?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        intent: "lot_specific",
+        answer: expect.any(String),
+        lotSpecificMeta: expect.objectContaining({
+          lotNameMatch: expect.objectContaining({
+            lotName: expect.stringContaining("North Campus"),
+          }),
+          lotForecast: expect.objectContaining({
+            lotName: expect.stringContaining("North Campus"),
+            occupancyPercent: expect.any(Number),
+          }),
+        }),
+      })
+    );
+  });
+
+  it("adds an alternative recommendation when a better lot exists", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "How busy is East Visitor lot around noon?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.intent).toBe("lot_specific");
+    expect(res.body.comparisonDeltaPercent).toEqual(expect.any(Number));
+    expect(res.body.alternativeRecommendation).toEqual(
+      expect.objectContaining({
+        lotCode: expect.any(String),
+        lotName: expect.any(String),
+        occupancyPercent: expect.any(Number),
       })
     );
   });

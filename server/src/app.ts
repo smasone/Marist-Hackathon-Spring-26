@@ -333,6 +333,21 @@ function extractLotSearchText(normalizedQuestion: string): string | null {
   return filtered.join(" ");
 }
 
+function extractDestinationFromQuestion(normalizedQuestion: string): string | null {
+  const q = normalizedQuestion.replace(/\s+/g, " ").trim();
+  const m = q.match(
+    /\b(?:to be at|be at|to|at|near)\s+([a-z0-9][a-z0-9 '&-]{1,80}?)(?=\s+(?:by|around|at)\b|[?.!,]|$)/
+  );
+  if (!m || !m[1]) {
+    return null;
+  }
+  const destination = m[1]
+    .replace(/\s+/g, " ")
+    .replace(/\b(the|building|hall)\b/g, "")
+    .trim();
+  return destination.length >= 3 ? destination : null;
+}
+
 /** Truncated single-line question for debug logs only. */
 function askLogPreview(q: string, max = 100): string {
   const s = q.replace(/\s+/g, " ").trim();
@@ -465,6 +480,39 @@ async function resolveMentionedLotFromQuestion(
     return null;
   }
   return ParkingAnalyticsService.findBestLotNameMatch(lotHint);
+}
+
+type AskRoutingIntent = "lot_specific" | "recommendation" | "other";
+
+function classifyAskParkingIntent(input: {
+  normalizedQuestion: string;
+  lotNameMatch: Awaited<ReturnType<typeof ParkingAnalyticsService.findBestLotNameMatch>>;
+}): AskRoutingIntent {
+  const q = input.normalizedQuestion;
+  const hasRecommendationKeyword =
+    q.includes("best") || q.includes("recommend") || q.includes("where should");
+  if (!input.lotNameMatch) {
+    return hasRecommendationKeyword ? "recommendation" : "other";
+  }
+  const strongLotMatch =
+    input.lotNameMatch.matchType === "exact" ||
+    input.lotNameMatch.matchType === "prefix" ||
+    input.lotNameMatch.score >= 200;
+  if (!strongLotMatch) {
+    return hasRecommendationKeyword ? "recommendation" : "other";
+  }
+  const lotSpecificLanguage =
+    q.includes(" in ") ||
+    q.includes(" at ") ||
+    q.includes(" near ") ||
+    q.includes("about") ||
+    q.includes("how busy") ||
+    q.includes("can i park") ||
+    q.includes("what about");
+  if (lotSpecificLanguage && !hasRecommendationKeyword) {
+    return "lot_specific";
+  }
+  return hasRecommendationKeyword ? "recommendation" : "lot_specific";
 }
 
 const RULES_FAQ_GROUNDING_NOTE =
@@ -860,23 +908,143 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
 
     const normalizedQuestion = normalizeQuestion(question);
     const zones = parseZonesFromQuestion(normalizedQuestion);
+    const lotNameMatch = await resolveMentionedLotFromQuestion(normalizedQuestion);
+    const destinationHint = extractDestinationFromQuestion(normalizedQuestion);
+    const routingIntent = classifyAskParkingIntent({
+      normalizedQuestion,
+      lotNameMatch,
+    });
 
     console.log("[ask] POST /api/parking/ask", {
       questionPreview: askLogPreview(question),
       openaiConfigured: Boolean(env.openaiApiKey),
     });
 
-    if (
-      normalizedQuestion.includes("best") ||
-      normalizedQuestion.includes("recommend") ||
-      normalizedQuestion.includes("where should")
-    ) {
+    if (routingIntent === "lot_specific" && lotNameMatch !== null) {
+      console.log("[ask] routed intent=lot_specific", {
+        lotCode: lotNameMatch.lotCode,
+        lotName: lotNameMatch.lotName,
+        matchType: lotNameMatch.matchType,
+      });
+      const inferredInstant = inferReferenceInstantFromQuestion(question);
+      const lotForecast = await ParkingAnalyticsService.getLotForecastByLotId(
+        lotNameMatch.lotId,
+        {
+          targetHour: inferredInstant?.at.getHours() ?? null,
+          targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
+          targetBuildingName: destinationHint,
+        }
+      );
+      if (lotForecast === null || lotForecast.occupancyPercent === null) {
+        res.json({
+          intent: "lot_specific",
+          answer: `I could not estimate a forecast for ${lotNameMatch.lotName} from stored historical snapshots yet.`,
+          explanation:
+            "Try asking for a best-lot recommendation, and I can suggest an alternative with available forecast data.",
+          disclaimer: FORECAST_DISCLAIMER,
+          lotSpecificMeta: {
+            lotNameMatch,
+            lotForecast: null,
+          },
+          alternativeRecommendation: null,
+          comparisonDeltaPercent: null,
+          data: null,
+        });
+        return;
+      }
+      const lotAnswer = `For ${lotForecast.lotName}, the expected occupancy around this time is ${lotForecast.occupancyPercent}% (${busynessCategory(
+        lotForecast.occupancyPercent
+      )}).`;
+      const lotExplanation =
+        "That estimate comes from historical parking patterns for matching times, not live occupancy sensors.";
+      const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
+        targetHour: inferredInstant?.at.getHours() ?? null,
+        targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
+        targetBuildingName: destinationHint,
+      });
+      const comparisonDeltaPercent =
+        recommendation && recommendation.lotCode !== lotForecast.lotCode
+          ? Number((lotForecast.occupancyPercent - recommendation.occupancyPercent).toFixed(2))
+          : null;
+      // Keep a low threshold so users see an alternate lot when it is even modestly better.
+      const materiallyBetterAlternative =
+        recommendation &&
+        recommendation.lotCode !== lotForecast.lotCode &&
+        comparisonDeltaPercent !== null &&
+        comparisonDeltaPercent >= 1
+          ? recommendation
+          : null;
+      const supportingDetails = [
+        `Requested lot zone: ${lotForecast.zoneType}.`,
+        `Requested lot code: ${lotForecast.lotCode}.`,
+        `Historical samples used: ${lotForecast.sampleCount}.`,
+      ];
+      if (destinationHint) {
+        supportingDetails.push(`Destination context detected: ${destinationHint}.`);
+      }
+      if (inferredInstant?.inferredFromQuestion) {
+        supportingDetails.push(`Time context inferred from your question: ${inferredInstant.label}.`);
+      }
+      if (materiallyBetterAlternative) {
+        supportingDetails.push(
+          `A better forecasted option is ${materiallyBetterAlternative.lotName} at about ${materiallyBetterAlternative.occupancyPercent}% occupancy.`
+        );
+      }
+      const factsLotSpecific = mergeFactsWithTimelinessNote({
+        lotNameMatch,
+        requestedLot: {
+          lotId: lotForecast.lotId,
+          lotCode: lotForecast.lotCode,
+          lotName: lotForecast.lotName,
+          zoneType: lotForecast.zoneType,
+          occupancyPercent: lotForecast.occupancyPercent,
+          busynessCategory: busynessCategory(lotForecast.occupancyPercent),
+          sampleCount: lotForecast.sampleCount,
+          latestSnapshotTime: lotForecast.latestSnapshotTime?.toISOString() ?? null,
+        },
+        alternativeRecommendation:
+          materiallyBetterAlternative === null
+            ? null
+            : {
+                lotCode: materiallyBetterAlternative.lotCode,
+                lotName: materiallyBetterAlternative.lotName,
+                zoneType: materiallyBetterAlternative.zoneType,
+                occupancyPercent: materiallyBetterAlternative.occupancyPercent,
+                sampleCount: materiallyBetterAlternative.sampleCount,
+              },
+        comparisonDeltaPercent,
+        destinationHint,
+      });
+      const phrasedLotAnswer = await parkingAnswerWithOptionalAiPhrasing(
+        question,
+        "recommendation",
+        factsLotSpecific,
+        lotAnswer
+      );
+      res.json({
+        intent: "lot_specific",
+        answer: phrasedLotAnswer,
+        explanation: lotExplanation,
+        disclaimer: FORECAST_DISCLAIMER,
+        supportingDetails,
+        lotSpecificMeta: {
+          lotNameMatch,
+          lotForecast,
+        },
+        alternativeRecommendation: materiallyBetterAlternative,
+        comparisonDeltaPercent,
+        data: lotForecast,
+      });
+      return;
+    }
+
+    if (routingIntent === "recommendation") {
       console.log("[ask] routed intent=recommendation", { zones });
-      const lotNameMatch = await resolveMentionedLotFromQuestion(normalizedQuestion);
       const inferredInstant = inferReferenceInstantFromQuestion(question);
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
         targetHour: inferredInstant?.at.getHours() ?? null,
         targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
+        targetBuildingName: destinationHint,
       });
       if (recommendation === null) {
         console.log("[ask] recommendation: no historical forecast data for zones");
@@ -901,6 +1069,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       }
       const facts = {
         zonesRequested: zones,
+        destinationHint,
         lotNameMatch:
           lotNameMatch === null
             ? null
@@ -1087,11 +1256,11 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     ) {
       console.log("[ask] routed intent=recommendation (time-based parking context)");
       const zones = parseZonesFromQuestion(normalizedQuestion);
-      const lotNameMatch = await resolveMentionedLotFromQuestion(normalizedQuestion);
       const inferredInstant = inferReferenceInstantFromQuestion(question);
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
         targetHour: inferredInstant?.at.getHours() ?? null,
         targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
+        targetBuildingName: destinationHint,
       });
       if (recommendation === null) {
         let athleticsOnly: AthleticsAskSupplement = emptyAthleticsAskSupplement();
@@ -1128,8 +1297,12 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           `Matched lot reference: ${lotNameMatch.lotName} (${lotNameMatch.matchType} match on ${lotNameMatch.matchSource === "lotName" ? "lot name" : "alt name"}).`
         );
       }
+      if (destinationHint) {
+        supportingDetailsTime.push(`Destination context detected: ${destinationHint}.`);
+      }
       const factsTime = {
         zonesRequested: zones,
+        destinationHint,
         lotNameMatch:
           lotNameMatch === null
             ? null
