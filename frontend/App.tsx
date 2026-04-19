@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import "./index.css";
-import logo from "./marist-logo.png"; // place your uploaded logo in src folder
+import logo from "./marist-logo.png";
 import {
   askParking,
   fetchParkingLots,
@@ -11,7 +11,6 @@ import {
 } from "./parkingApi";
 
 type UserType = "resident" | "commuter" | "faculty" | "visitor";
-type TimeView = "now" | "1h" | "2h";
 
 interface LiveParkingLot {
   lotCode: string;
@@ -22,22 +21,65 @@ interface LiveParkingLot {
 }
 
 function getColor(v: number) {
-  if (v > 0.8) return "#eab308"; // yellow
-  if (v > 0.6) return "#22c55e"; // green
-  return "#2563eb"; // blue
+  if (v > 0.8) return "#eab308";
+  if (v > 0.6) return "#22c55e";
+  return "#2563eb";
 }
 
 function percent(v: number) {
   return `${Math.round(v * 100)}%`;
 }
 
+function toSearchableText(lot: LiveParkingLot): string {
+  const record = lot as Record<string, unknown>;
+  return [
+    lot.lotCode,
+    lot.lotName,
+    lot.zoneType,
+    typeof record.accessType === "string" ? record.accessType : "",
+    typeof record.permitType === "string" ? record.permitType : "",
+    typeof record.category === "string" ? record.category : "",
+    typeof record.tags === "string" ? record.tags : "",
+    Array.isArray(record.tags) ? record.tags.join(" ") : "",
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function isAccessibleLot(lot: LiveParkingLot): boolean {
+  const text = toSearchableText(lot);
+  return /(accessible|accessibility|ada|disabled|disability|handicap)/.test(
+    text,
+  );
+}
+
+function getDistanceRank(lot: LiveParkingLot): number | null {
+  const record = lot as Record<string, unknown>;
+  const candidates = [
+    record.distanceMeters,
+    record.distanceMiles,
+    record.distance,
+    record.distanceRank,
+    record.rank,
+    record.proximityRank,
+  ];
+
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 export default function App() {
   const [user, setUser] = useState<UserType>("commuter");
-  const [time, setTime] = useState<TimeView>("now");
   const [clock, setClock] = useState("");
   const [apiLots, setApiLots] = useState<LiveParkingLot[] | null>(null);
   const [apiLoading, setApiLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [showAccessibleOnly, setShowAccessibleOnly] = useState(false);
   const [askInput, setAskInput] = useState("");
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
@@ -104,14 +146,34 @@ export default function App() {
   const allowedZones = useMemo(() => {
     if (user === "faculty") return new Set(["faculty"]);
     if (user === "visitor") return new Set(["visitor"]);
-    return new Set(["student"]);
+    if (user === "resident") return new Set(["resident"]);
+    return new Set(["commuter"]);
   }, [user]);
 
   const availableLots = useMemo(() => {
-    return (apiLots ?? []).filter((lot) =>
-      allowedZones.has(lot.zoneType.toLowerCase()),
-    );
-  }, [allowedZones, apiLots]);
+    const lots = apiLots ?? [];
+
+    if (showAccessibleOnly) {
+      return [...lots]
+        .filter((lot) => isAccessibleLot(lot))
+        .sort((a, b) => {
+          const distanceA = getDistanceRank(a);
+          const distanceB = getDistanceRank(b);
+
+          if (distanceA !== null && distanceB !== null) {
+            return distanceA - distanceB;
+          }
+          if (distanceA !== null) return -1;
+          if (distanceB !== null) return 1;
+
+          const occupancyA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
+          const occupancyB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
+          return occupancyA - occupancyB;
+        });
+    }
+
+    return lots.filter((lot) => allowedZones.has(lot.zoneType.toLowerCase()));
+  }, [allowedZones, apiLots, showAccessibleOnly]);
 
   const stats = useMemo(() => {
     let open = 0;
@@ -132,11 +194,22 @@ export default function App() {
 
   const bestLot = useMemo(() => {
     return [...availableLots].sort((a, b) => {
+      if (showAccessibleOnly) {
+        const distanceA = getDistanceRank(a);
+        const distanceB = getDistanceRank(b);
+
+        if (distanceA !== null && distanceB !== null) {
+          return distanceA - distanceB;
+        }
+        if (distanceA !== null) return -1;
+        if (distanceB !== null) return 1;
+      }
+
       const scoreA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
       const scoreB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
       return scoreA - scoreB;
     })[0];
-  }, [availableLots]);
+  }, [availableLots, showAccessibleOnly]);
 
   async function submitAsk(): Promise<void> {
     const question = askInput.trim();
@@ -209,22 +282,9 @@ export default function App() {
             >
               Live Statistics • Smart Recommendations • {clock}
             </p>
-
-            <p
-              style={{
-                margin: "8px 0 0 0",
-                color: "#94a3b8",
-                fontSize: 12,
-                fontStyle: "italic",
-              }}
-            >
-              Time toggles are visual only; backend currently stores latest real
-              snapshots.
-            </p>
           </div>
         </div>
 
-        {/* FILTERS */}
         <div
           style={{
             display: "flex",
@@ -251,30 +311,30 @@ export default function App() {
             </button>
           ))}
 
-          {["Now", "1 Hour", "2 Hours"].map((t, i) => {
-            const raw = ["now", "1h", "2h"][i];
-            return (
-              <button
-                key={t}
-                onClick={() => setTime(raw as TimeView)}
-                style={{
-                  padding: "10px 16px",
-                  border: "none",
-                  borderRadius: 10,
-                  cursor: "pointer",
-                  background: time === raw ? "#be123c" : "#f1f5f9",
-                  color: time === raw ? "white" : "#111827",
-                  fontWeight: 600,
-                }}
-              >
-                {t}
-              </button>
-            );
-          })}
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderRadius: 10,
+              background: showAccessibleOnly ? "#fee2e2" : "#f8fafc",
+              border: "1px solid #e2e8f0",
+              fontWeight: 600,
+              color: "#334155",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showAccessibleOnly}
+              onChange={(e) => setShowAccessibleOnly(e.target.checked)}
+            />
+            Show accessibility spaces
+          </label>
         </div>
       </div>
 
-      {/* LIVE API SUMMARY (real backend) */}
       <div
         style={{
           background: "white",
@@ -289,11 +349,11 @@ export default function App() {
         </h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
           Data from{" "}
-          <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> — same
-          fields as the backend JSON.
+          <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> and{" "}
+          <code style={{ fontSize: 13 }}>GET /api/parking/lots</code>.
         </p>
 
-        {apiLoading && <p style={{ color: "#64748b" }}>Loading…</p>}
+        {apiLoading && <p style={{ color: "#64748b" }}>Loading...</p>}
         {apiError && (
           <p style={{ color: "#b91c1c", fontWeight: 600 }}>
             {apiError}
@@ -305,7 +365,7 @@ export default function App() {
                 marginTop: 8,
               }}
             >
-              Start the server on port 3001 (see <code>server/README.md</code>)
+              Start the server on port 3001 (see <code>server/README.md</code>){" "}
               and use <code>npm run dev</code> here so Vite can proxy{" "}
               <code>/api</code>, or set <code>VITE_API_BASE_URL</code>.
             </span>
@@ -403,7 +463,7 @@ export default function App() {
                       }}
                     >
                       {row.occupancyPercent === null
-                        ? "—"
+                        ? "-"
                         : `${row.occupancyPercent}%`}
                     </td>
                     <td
@@ -413,7 +473,7 @@ export default function App() {
                       }}
                     >
                       {row.latestSnapshotTime === null
-                        ? "—"
+                        ? "-"
                         : new Date(row.latestSnapshotTime).toLocaleString()}
                     </td>
                   </tr>
@@ -424,7 +484,6 @@ export default function App() {
         )}
       </div>
 
-      {/* STATS */}
       <div
         style={{
           display: "grid",
@@ -437,7 +496,7 @@ export default function App() {
           ["Open Lots", stats.open, "#2563eb"],
           ["Busy Lots", stats.busy, "#22c55e"],
           ["Nearly Full", stats.full, "#eab308"],
-          ["Your Access", availableLots.length, "#be123c"],
+          ["Matching Lots", availableLots.length, "#be123c"],
         ].map(([title, value, color]) => (
           <div
             key={title as string}
@@ -462,7 +521,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* BEST LOT */}
       {bestLot && (
         <div
           style={{
@@ -473,7 +531,11 @@ export default function App() {
             border: "2px solid #fecdd3",
           }}
         >
-          <h2 style={{ marginTop: 0, color: "#be123c" }}>Best Suggested Lot</h2>
+          <h2 style={{ marginTop: 0, color: "#be123c" }}>
+            {showAccessibleOnly
+              ? "Nearest Accessible Parking"
+              : "Best Suggested Lot"}
+          </h2>
           <h3 style={{ marginBottom: 8 }}>
             {bestLot.lotName} ({bestLot.lotCode})
           </h3>
@@ -487,12 +549,13 @@ export default function App() {
           </p>
 
           <p style={{ color: "#16a34a", fontWeight: 600 }}>
-            Lowest current occupancy in your selected access category.
+            {showAccessibleOnly
+              ? "Showing accessible parking first. If the backend provides distance or rank fields, the nearest spots are prioritized."
+              : "Lowest current occupancy in your selected access category."}
           </p>
         </div>
       )}
 
-      {/* ASK AI */}
       <div
         style={{
           background: "white",
@@ -505,8 +568,8 @@ export default function App() {
         <h2 style={{ color: "#be123c", marginTop: 0 }}>Ask the AI</h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
           Questions go to <code>POST /api/parking/ask</code>: lot occupancy and
-          recommendations use the app's database; permit and policy questions
-          use Marist's official Parking FAQ when matched.
+          recommendations use the app&apos;s database; permit and policy
+          questions use Marist&apos;s official Parking FAQ when matched.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
@@ -570,7 +633,7 @@ export default function App() {
             </p>
             <p style={{ margin: 0, color: "#334155", whiteSpace: "pre-wrap" }}>
               {askResult.answer.trim() === ""
-                ? "(Empty answer from API — check backend logs and response shape.)"
+                ? "(Empty answer from API - check backend logs and response shape.)"
                 : askResult.answer}
             </p>
             {askResult.sourceUrl && (
@@ -593,7 +656,6 @@ export default function App() {
         )}
       </div>
 
-      {/* LOT LIST */}
       <div
         style={{
           background: "white",
@@ -603,8 +665,18 @@ export default function App() {
         }}
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>
-          Available Parking Lots
+          {showAccessibleOnly
+            ? "Accessible Parking Lots"
+            : "Available Parking Lots"}
         </h2>
+
+        {availableLots.length === 0 && (
+          <p style={{ color: "#64748b", marginBottom: 0 }}>
+            {showAccessibleOnly
+              ? "No accessible lots were identified in the current API response."
+              : "No lots match the current filter."}
+          </p>
+        )}
 
         {availableLots.map((lot) => {
           const occupancyFraction =
@@ -674,7 +746,7 @@ export default function App() {
                 <span>
                   Snapshot:{" "}
                   {lot.latestSnapshotTime === null
-                    ? "—"
+                    ? "-"
                     : new Date(lot.latestSnapshotTime).toLocaleString()}
                 </span>
               </div>
