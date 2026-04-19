@@ -349,6 +349,47 @@ function splitIntoParagraphs(plainText: string): string[] {
 }
 
 /**
+ * When the stripped FAQ is one very large block, keep excerpts within `maxLen` while
+ * favoring a window anchored near matched question tokens (deterministic; demo-stable grounding).
+ */
+function clipParagraphAroundTokens(
+  para: string,
+  tokens: string[],
+  maxLen: number
+): string {
+  if (para.length <= maxLen) {
+    return para;
+  }
+  if (maxLen < 80) {
+    return `${para.slice(0, Math.max(0, maxLen - 3))}...`;
+  }
+  const lower = para.toLowerCase();
+  /** Prefer the latest first-hit among tokens (long FAQ pages often bury answers after nav chrome). */
+  let anchorPos = -1;
+  for (const tok of tokens) {
+    const i = lower.indexOf(tok);
+    if (i >= 0) {
+      anchorPos = anchorPos < 0 ? i : Math.max(anchorPos, i);
+    }
+  }
+  const innerBudget = maxLen - 6;
+  const target = anchorPos >= 0 ? anchorPos : 0;
+  const start = Math.max(
+    0,
+    Math.min(target, Math.max(0, para.length - innerBudget))
+  );
+  const end = Math.min(para.length, start + innerBudget);
+  let slice = para.slice(start, end).trim();
+  if (start > 0) {
+    slice = `...${slice}`;
+  }
+  if (end < para.length) {
+    slice = `${slice}...`;
+  }
+  return slice;
+}
+
+/**
  * Picks a few FAQ paragraphs that overlap the question tokens (simple grounding).
  * Returns empty when nothing matches strongly enough — caller must use safe fallback.
  */
@@ -402,11 +443,19 @@ export function selectFaqExcerptsForQuestion(
     if (out.includes(row.para)) {
       continue;
     }
-    if (total + row.para.length > maxTotalChars) {
+    const remaining = maxTotalChars - total;
+    if (remaining <= 0) {
       break;
     }
-    out.push(row.para);
-    total += row.para.length;
+    const piece =
+      row.para.length > remaining
+        ? clipParagraphAroundTokens(row.para, tokens, remaining)
+        : row.para;
+    if (piece.trim().length < 20) {
+      break;
+    }
+    out.push(piece);
+    total += piece.length;
   }
   return out;
 }

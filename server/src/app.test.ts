@@ -138,6 +138,80 @@ describe("POST /api/parking/ask", () => {
       expect.objectContaining({
         intent: "recommendation",
         answer: expect.any(String),
+        data: expect.objectContaining({
+          lotCode: expect.any(String),
+          reason: expect.any(String),
+        }),
+      })
+    );
+  });
+
+  it("returns busy_before_nine with rows array and answer", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "Which lots are usually busy before 9?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        intent: "busy_before_nine",
+        answer: expect.any(String),
+      })
+    );
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("returns lots_list with lot rows", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "Can you list the parking lots?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        intent: "lots_list",
+        answer: expect.any(String),
+      })
+    );
+    expect(Array.isArray(res.body.data)).toBe(true);
+    expect((res.body.data as { lotCode: string }[]).map((r) => r.lotCode)).toEqual(
+      expect.arrayContaining(["DEMO-N-01", "DEMO-S-02", "DEMO-E-03"])
+    );
+  });
+
+  it("returns parking_rules_faq with FAQ-shaped payload (cached or network)", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "Where will commuter students be assigned to park?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        intent: "parking_rules_faq",
+        answer: expect.any(String),
+        sourceType: "official_web",
+        sourceUrl: expect.any(String),
+      })
+    );
+    expect(res.body.data).toEqual(
+      expect.objectContaining({
+        matchedFaqExcerpts: expect.any(Array),
+      })
+    );
+    expect((res.body.data as { matchedFaqExcerpts: string[] }).matchedFaqExcerpts.length).toBeGreaterThan(0);
+  });
+
+  it("returns unsupported with data null for unrelated questions", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .send({ question: "What is the capital of France?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        intent: "unsupported",
+        answer: expect.any(String),
+        data: null,
       })
     );
   });
@@ -147,5 +221,29 @@ describe("POST /api/parking/ask", () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Question is required" });
+  });
+
+  it("returns 400 when question is only whitespace", async () => {
+    const res = await request(app).post("/api/parking/ask").send({ question: "   \n\t  " });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Question is required" });
+  });
+
+  it("returns 400 when question is not a string", async () => {
+    const res = await request(app).post("/api/parking/ask").send({ question: 123 });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Question must be a non-empty string" });
+  });
+
+  it("returns 400 for malformed JSON body", async () => {
+    const res = await request(app)
+      .post("/api/parking/ask")
+      .set("Content-Type", "application/json")
+      .send("{not json");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Invalid JSON body" });
   });
 });
