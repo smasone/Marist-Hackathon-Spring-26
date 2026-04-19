@@ -430,14 +430,6 @@ export default function App() {
                       borderBottom: "1px solid #e2e8f0",
                     }}
                   >
-                    Lot code
-                  </th>
-                  <th
-                    style={{
-                      padding: "8px 6px",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
-                  >
                     Lot name
                   </th>
                   <th
@@ -469,14 +461,6 @@ export default function App() {
               <tbody>
                 {apiLots.map((row) => (
                   <tr key={row.lotCode}>
-                    <td
-                      style={{
-                        padding: "10px 6px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.lotCode}
-                    </td>
                     <td
                       style={{
                         padding: "10px 6px",
@@ -569,9 +553,7 @@ export default function App() {
           }}
         >
           <h2 style={{ marginTop: 0, color: "#be123c" }}>Predicted Best Lot</h2>
-          <h3 style={{ marginBottom: 8 }}>
-            {bestLot.lotName} ({bestLot.lotCode})
-          </h3>
+          <h3 style={{ marginBottom: 8 }}>{bestLot.lotName}</h3>
 
           <p style={{ color: "#475569" }}>
             Expected occupancy:{" "}
@@ -812,7 +794,7 @@ export default function App() {
                 }}
               >
                 <strong>
-                  {lot.lotName} ({lot.lotCode})
+                  {lot.lotName}
                 </strong>
                 <strong
                   style={{
