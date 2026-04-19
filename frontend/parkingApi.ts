@@ -56,8 +56,6 @@ export interface ParkingAskResponse {
   supportingDetails?: string[];
   lotSpecificMeta?: {
     lotNameMatch: {
-      lotId: number;
-      lotCode: string;
       lotName: string;
       altName?: string | null;
       matchSource: "lotName" | "altName";
@@ -65,8 +63,6 @@ export interface ParkingAskResponse {
       score: number;
     } | null;
     lotForecast: {
-      lotId: number;
-      lotCode: string;
       lotName: string;
       zoneType: string;
       occupancyPercent: number | null;
@@ -75,7 +71,6 @@ export interface ParkingAskResponse {
     } | null;
   };
   alternativeRecommendation?: {
-    lotCode: string;
     lotName: string;
     zoneType: string;
     occupancyPercent: number;
@@ -92,8 +87,6 @@ export interface ParkingAskResponse {
     sampleCount?: number;
     latestSnapshotTime?: string;
     lotNameMatch?: {
-      lotId: number;
-      lotCode: string;
       lotName: string;
       altName?: string | null;
       matchSource: "lotName" | "altName";
