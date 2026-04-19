@@ -1,9 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from "@jest/globals";
+import type { AthleticsEventSnippet } from "./maristAthleticsScheduleService";
 import {
   buildAthleticsAskSupplementFromLookup,
   findOfficialAthleticsEventsNearTime,
+  isAthleticsEventLikelyCampusParkingRelevant,
   resetAthleticsScheduleCachesForTests,
 } from "./maristAthleticsScheduleService";
+
+function snippet(partial: Partial<AthleticsEventSnippet> & Pick<AthleticsEventSnippet, "id" | "title">): AthleticsEventSnippet {
+  return {
+    startAtIso: partial.startAtIso ?? "2026-04-18T16:00:00",
+    displayTime: partial.displayTime ?? "4:00 PM",
+    location: partial.location ?? null,
+    facilityTitle: partial.facilityTitle ?? null,
+    locationIndicator: partial.locationIndicator ?? null,
+    atVs: partial.atVs ?? null,
+    ...partial,
+  };
+}
 
 describe("maristAthleticsScheduleService", () => {
   beforeEach(() => {
@@ -19,13 +33,16 @@ describe("maristAthleticsScheduleService", () => {
         ok: true,
         lastCheckedAt: "2026-04-01T12:00:00.000Z",
         matchedEvents: [
-          {
+          snippet({
             id: 1,
             startAtIso: "2026-04-18T16:00:00",
             displayTime: "4:00 PM",
             title: "Baseball vs Example University",
             location: "Heritage Financial Park",
-          },
+            facilityTitle: null,
+            locationIndicator: "H",
+            atVs: "vs",
+          }),
         ],
         monthsLoaded: ["2026-04"],
       },
@@ -35,6 +52,71 @@ describe("maristAthleticsScheduleService", () => {
     expect(sup.eventSignalFound).toBe(true);
     expect(sup.answerSuffix).toMatch(/Marist athletics event/i);
     expect(sup.eventImpactNote).toMatch(/advisory only/i);
+  });
+
+  it("does not advise campus parking for away or opponent-site events", () => {
+    const sup = buildAthleticsAskSupplementFromLookup(
+      {
+        ok: true,
+        lastCheckedAt: "2026-04-01T12:00:00.000Z",
+        matchedEvents: [
+          snippet({
+            id: 2,
+            startAtIso: "2026-04-18T16:00:00",
+            displayTime: "4:00 PM",
+            title: "Baseball at Niagara University",
+            location: "Niagara University",
+            facilityTitle: null,
+            locationIndicator: "A",
+            atVs: "at",
+          }),
+        ],
+        monthsLoaded: ["2026-04"],
+      },
+      true
+    );
+    expect(sup.eventSignalFound).toBe(false);
+    expect(sup.answerSuffix).toBeNull();
+    expect(sup.eventImpactNote).toBeNull();
+  });
+
+  it("isAthleticsEventLikelyCampusParkingRelevant uses feed and title heuristics", () => {
+    expect(
+      isAthleticsEventLikelyCampusParkingRelevant(
+        snippet({
+          id: 1,
+          title: "Soccer vs Other U",
+          locationIndicator: null,
+          atVs: null,
+          location: null,
+          facilityTitle: null,
+        })
+      )
+    ).toBe(true);
+    expect(
+      isAthleticsEventLikelyCampusParkingRelevant(
+        snippet({
+          id: 2,
+          title: "Baseball at Niagara University",
+          locationIndicator: null,
+          atVs: null,
+          location: null,
+          facilityTitle: null,
+        })
+      )
+    ).toBe(false);
+    expect(
+      isAthleticsEventLikelyCampusParkingRelevant(
+        snippet({
+          id: 3,
+          title: "Tournament game",
+          locationIndicator: "N",
+          atVs: null,
+          location: "Syracuse University",
+          facilityTitle: null,
+        })
+      )
+    ).toBe(false);
   });
 
   it("surfaces a safe note when the schedule cannot be loaded", () => {
@@ -62,6 +144,7 @@ describe("maristAthleticsScheduleService", () => {
             date: "2026-04-18T16:00:00",
             time: "4:00 PM",
             location: "Campus",
+            location_indicator: "H",
             sport: { title: "Lacrosse" },
             opponent: { title: "Visitor U", prefix: null },
             at_vs: "vs",
@@ -71,6 +154,7 @@ describe("maristAthleticsScheduleService", () => {
             date: "2026-04-19T12:00:00",
             time: "12:00 PM",
             location: "Away",
+            location_indicator: "A",
             sport: { title: "Soccer" },
             opponent: { title: "Other U", prefix: null },
             at_vs: "at",

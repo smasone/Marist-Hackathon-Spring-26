@@ -196,7 +196,81 @@ export interface AthleticsEventSnippet {
   startAtIso: string;
   displayTime: string;
   title: string;
+  /** Game site / neutral description from the feed when present. */
   location: string | null;
+  facilityTitle: string | null;
+  /** Sidearm `location_indicator`: H = home, A = away, N = neutral (heuristics apply). */
+  locationIndicator: string | null;
+  /** Sidearm `at_vs`, e.g. `vs` (home-style) or `at` (away-style). */
+  atVs: string | null;
+}
+
+/** Lowercase strings that suggest the event is in/near Marist’s usual home footprint. */
+const HOME_VENUE_OR_CAMPUS_HINTS: readonly string[] = [
+  "marist",
+  "mccann",
+  "tenney",
+  "heritage financial",
+  "leonidoff",
+  "north field",
+  "longview park",
+  "poughkeepsie",
+  "new windsor",
+  "sportsplex",
+];
+
+function normalizeAtVsToken(raw: string | null | undefined): string {
+  if (raw === null || raw === undefined) {
+    return "";
+  }
+  return raw.trim().toLowerCase().replace(/\./g, "");
+}
+
+/**
+ * Returns true only when an event plausibly draws people to Marist’s campus area
+ * (home / on-campus style). Away games and obvious opponent-site locations are excluded.
+ *
+ * **Assumptions:** Sidearm `location_indicator` and `at_vs` are authoritative when present.
+ * When both are missing, we use conservative title/location heuristics and default to false.
+ */
+export function isAthleticsEventLikelyCampusParkingRelevant(ev: AthleticsEventSnippet): boolean {
+  const locInd = (ev.locationIndicator ?? "").trim().toUpperCase();
+  if (locInd === "A") {
+    return false;
+  }
+  if (locInd === "H") {
+    return true;
+  }
+
+  const atVs = normalizeAtVsToken(ev.atVs);
+  if (atVs === "at") {
+    return false;
+  }
+  if (atVs === "vs" || atVs === "v") {
+    return true;
+  }
+
+  const titleLower = ev.title.toLowerCase();
+  if (/\bat\s+[a-z0-9]/i.test(titleLower)) {
+    return false;
+  }
+  if (/\bvs\.?\s/i.test(titleLower)) {
+    return true;
+  }
+
+  const locLower = (ev.location ?? "").toLowerCase();
+  const facLower = (ev.facilityTitle ?? "").toLowerCase();
+  const blob = `${titleLower} ${locLower} ${facLower}`;
+
+  if (HOME_VENUE_OR_CAMPUS_HINTS.some((hint) => blob.includes(hint))) {
+    return true;
+  }
+
+  if (locLower.length > 0 && /\b(university|college)\b/.test(locLower) && !locLower.includes("marist")) {
+    return false;
+  }
+
+  return false;
 }
 
 function buildEventTitle(ev: SidearmCalendarEvent): string {
@@ -231,7 +305,11 @@ function flattenEvents(days: SidearmCalendarDay[]): AthleticsEventSnippet[] {
         startAtIso: ev.date,
         displayTime: typeof ev.time === "string" ? ev.time : "",
         title: buildEventTitle(ev),
-        location: ev.location ?? ev.facility?.title ?? null,
+        location: ev.location ?? null,
+        facilityTitle: ev.facility?.title ?? null,
+        locationIndicator:
+          typeof ev.location_indicator === "string" ? ev.location_indicator : null,
+        atVs: typeof ev.at_vs === "string" ? ev.at_vs : null,
       });
     }
   }
@@ -427,7 +505,9 @@ export function buildAthleticsAskSupplementFromLookup(
     };
   }
 
-  if (lookup.matchedEvents.length === 0) {
+  const campusRelevant = lookup.matchedEvents.filter(isAthleticsEventLikelyCampusParkingRelevant);
+
+  if (campusRelevant.length === 0) {
     return {
       lookupAttempted: true,
       lookupOk: true,
@@ -442,14 +522,15 @@ export function buildAthleticsAskSupplementFromLookup(
     };
   }
 
-  const primary = lookup.matchedEvents[0];
-  const extra = lookup.matchedEvents.slice(1, 3);
-  const primaryWhen = primary.displayTime
-    ? `${primary.displayTime} (${primary.startAtIso})`
-    : primary.startAtIso;
+  const primary = campusRelevant[0];
+  const extra = campusRelevant.slice(1, 3);
+  const locationLabel = primary.location ?? primary.facilityTitle;
   const snippetParts = [
-    `${primary.title}${primary.location ? ` — ${primary.location}` : ""}`,
-    ...extra.map((e) => e.title),
+    `${primary.title}${locationLabel ? ` — ${locationLabel}` : ""}`,
+    ...extra.map((e) => {
+      const lab = e.location ?? e.facilityTitle;
+      return lab ? `${e.title} — ${lab}` : e.title;
+    }),
   ];
   const snippet = snippetParts.join("; ");
 
