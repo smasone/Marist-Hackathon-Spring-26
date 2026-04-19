@@ -4,7 +4,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
 import { env } from "./config/env";
@@ -47,6 +47,25 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+/**
+ * Express passes JSON parse failures to error middleware (`entity.parse.failed`).
+ * Keeps `POST /api/parking/ask` demo-stable when clients send malformed JSON.
+ */
+function isMalformedJsonBodyError(err: unknown): boolean {
+  if (err === null || err === undefined || typeof err !== "object") {
+    return false;
+  }
+  return (err as { type?: unknown }).type === "entity.parse.failed";
+}
+
+app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  if (isMalformedJsonBodyError(err)) {
+    res.status(400).json({ error: "Invalid JSON body" });
+    return;
+  }
+  next(err);
+});
 
 /**
  * Path to this file for swagger-jsdoc (`.ts` under `tsx`, `.js` when running compiled output).
@@ -253,17 +272,25 @@ async function parkingAnswerWithOptionalAiPhrasing(
   facts: Record<string, unknown>,
   fallbackAnswer: string
 ): Promise<string> {
-  const phrased = await formatParkingAnswer({
-    userQuestion,
-    intent,
-    facts,
-  });
-  console.log("[ask] optionalDbAiPhrasing", {
-    intent,
-    usedOpenAi: phrased !== null,
-    openaiConfigured: Boolean(env.openaiApiKey),
-  });
-  return phrased ?? fallbackAnswer;
+  try {
+    const phrased = await formatParkingAnswer({
+      userQuestion,
+      intent,
+      facts,
+    });
+    console.log("[ask] optionalDbAiPhrasing", {
+      intent,
+      usedOpenAi: phrased !== null,
+      openaiConfigured: Boolean(env.openaiApiKey),
+    });
+    return phrased ?? fallbackAnswer;
+  } catch (error) {
+    console.error("[ask] optionalDbAiPhrasing: unexpected error, using template", {
+      intent,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fallbackAnswer;
+  }
 }
 
 const RULES_FAQ_GROUNDING_NOTE =
@@ -332,11 +359,19 @@ async function respondParkingRulesFaq(
   const clipped = joined.length > 800 ? `${joined.slice(0, 797)}...` : joined;
   const deterministicAnswer = `${clipped}\n\nSource: ${sourceUrl}`;
 
-  const aiAnswer = await formatParkingRulesFaqAnswer({
-    userQuestion: question,
-    faqExcerpts: excerpts,
-    sourceUrl,
-  });
+  let aiAnswer: string | null = null;
+  try {
+    aiAnswer = await formatParkingRulesFaqAnswer({
+      userQuestion: question,
+      faqExcerpts: excerpts,
+      sourceUrl,
+    });
+  } catch (error) {
+    console.error("[ask] parking_rules_faq: OpenAI phrasing failed, using excerpts", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    aiAnswer = null;
+  }
 
   console.log("[ask] parking_rules_faq: response", {
     excerptCount: excerpts.length,
@@ -525,9 +560,14 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *     tags: [Parking]
  *     summary: Answers supported parking questions from DB data and/or the official Marist Parking FAQ
  *     description: >
- *       Occupancy-style intents use Postgres. Permit/rules questions use text from
- *       https://www.marist.edu/security/parking/faq (cached server-side). When `OPENAI_API_KEY`
- *       is set, answers may be rephrased but must stay grounded on those sources.
+ *       Supported categories: (1) **Postgres occupancy** — questions containing best/recommend/where should
+ *       (recommendation), busy before 9 / before nine (busy_before_nine), or list / how many / which lot
+ *       (lots_list). (2) **Official FAQ** — permit, policy, shuttle, enforcement, and similar heuristics
+ *       (`parking_rules_faq`) using cached plain text from https://www.marist.edu/security/parking/faq
+ *       with stale on-disk fallback when the live page cannot be fetched. (3) **unsupported** — safe template
+ *       when no route matches. When `OPENAI_API_KEY` is set, DB and FAQ answers may be rephrased; on missing key,
+ *       HTTP/model errors, or unexpected failures, the API returns deterministic template or excerpt text so
+ *       facts always come from SQL results or FAQ excerpts.
  *     requestBody:
  *       required: true
  *       content:
@@ -545,14 +585,19 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *           application/json:
  *             schema:
  *               type: object
+ *               required: [intent, answer, data]
  *               properties:
  *                 answer:
  *                   type: string
  *                 intent:
  *                   type: string
- *                   description: e.g. recommendation, busy_before_nine, lots_list, parking_rules_faq, unsupported
+ *                   description: recommendation | busy_before_nine | lots_list | parking_rules_faq | unsupported
  *                 data:
- *                   description: Optional — DB rows for analytics intents; matched FAQ excerpts for parking_rules_faq
+ *                   nullable: true
+ *                   description: >
+ *                     Analytics intents return arrays or a recommendation object from Postgres; `parking_rules_faq`
+ *                     returns `{ matchedFaqExcerpts, faqUnavailable? }`; `unsupported` and recommendation-without-data
+ *                     use `null`.
  *                 sourceType:
  *                   type: string
  *                   description: Present for parking_rules_faq (official_web)
@@ -574,14 +619,22 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *                 note:
  *                   type: string
  *       400:
- *         description: Missing question
+ *         description: Missing/blank question, non-string question, or invalid JSON body
  *       500:
  *         description: Server error
  */
 app.post("/api/parking/ask", async (req: Request, res: Response) => {
   try {
     const body = req.body as AskParkingRequestBody;
-    const question = typeof body.question === "string" ? body.question.trim() : "";
+    if (body.question === undefined || body.question === null) {
+      res.status(400).json({ error: "Question is required" });
+      return;
+    }
+    if (typeof body.question !== "string") {
+      res.status(400).json({ error: "Question must be a non-empty string" });
+      return;
+    }
+    const question = body.question.trim();
     if (question.length === 0) {
       res.status(400).json({ error: "Question is required" });
       return;
@@ -608,6 +661,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           intent: "recommendation",
           answer:
             "I could not find a lot with current snapshot data for that request yet.",
+          data: null,
         });
         return;
       }
@@ -716,6 +770,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       intent: "unsupported",
       answer:
         "I can answer supported questions about best lot recommendations, busy-before-9 trends, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page.",
+      data: null,
     });
   } catch (error) {
     console.error("POST /api/parking/ask failed:", error);

@@ -317,17 +317,18 @@ export class ParkingAnalyticsService {
         });
 
         const selected = candidates[0];
-        const occupancy = Number(selected.occupancyPercent);
+        const zoneSummary =
+            zoneSet && zoneSet.size > 0
+                ? `Eligible by zone filter from your question: ${[...zoneSet].sort().join(", ")}. `
+                : "No zone filter applied (all zone types considered). ";
+        const reason = `${zoneSummary}Chosen for lowest current occupancy among lots that have a latest snapshot in the database; ties break toward the newer snapshot.`;
         return {
             lotCode: selected.lotCode,
             lotName: selected.lotName,
             zoneType: selected.zoneType,
-            occupancyPercent: occupancy,
+            occupancyPercent: Number(selected.occupancyPercent),
             latestSnapshotTime: selected.latestSnapshotTime as Date,
-            reason:
-                occupancy <= 60
-                    ? "Lowest current occupancy among matching lots."
-                    : "Still the best available option among matching lots right now.",
+            reason,
         };
     }
 }
