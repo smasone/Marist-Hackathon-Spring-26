@@ -106,10 +106,35 @@ export class ParkingAnalyticsService {
     public static async getParkingLotSummaries(
         context?: ParkingForecastContext
     ): Promise<ParkingLotSummaryRow[]> {
-        const targetHour = context?.targetHour ?? null;
-        const targetDayOfWeek = context?.targetDayOfWeek ?? null;
-        const result = await pool.query(
-            `
+        const mapSummaryRows = (rows: any[]): ParkingLotSummaryRow[] =>
+            rows.map((row) => {
+                const access = {
+                    allowsResidents: Boolean(row.allowsResidents),
+                    allowsCommuters: Boolean(row.allowsCommuters),
+                    allowsFaculty: Boolean(row.allowsFaculty),
+                    allowsVisitors: Boolean(row.allowsVisitors),
+                };
+                return {
+                    lotCode: row.lotCode,
+                    lotName: row.lotName,
+                    zoneType: inferZoneType(access),
+                    occupancyPercent:
+                        row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
+                    latestSnapshotTime:
+                        row.latestSnapshotTime != null
+                            ? (row.latestSnapshotTime as Date)
+                            : null,
+                    sampleCount: Number(row.sampleCount),
+                    allowedZones: allowedZonesForLot(access),
+                };
+            });
+
+        const runSummaryQuery = async (
+            targetHour: number | null,
+            targetDayOfWeek: number | null
+        ): Promise<ParkingLotSummaryRow[]> => {
+            const result = await pool.query(
+                `
       WITH lot_capacity AS (
         SELECT lotid, COUNT(*)::int AS capacity
         FROM spaces
@@ -136,13 +161,11 @@ export class ParkingAnalyticsService {
         l.allowsvisitors AS "allowsVisitors",
         ROUND(
           AVG(
-            LEAST(
-              100,
-              CASE
-                WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
-                ELSE (du.entry_count::numeric / lc.capacity::numeric) * 100
-              END
-            )
+            CASE
+              WHEN du.entry_count IS NULL THEN NULL
+              WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+              ELSE LEAST(100, (du.entry_count::numeric / lc.capacity::numeric) * 100)
+            END
           ),
           2
         ) AS "occupancyPercent",
@@ -160,30 +183,22 @@ export class ParkingAnalyticsService {
         l.allowsvisitors
       ORDER BY l.lotid ASC;
       `,
-            [targetHour, targetDayOfWeek]
-        );
+                [targetHour, targetDayOfWeek]
+            );
+            return mapSummaryRows(result.rows);
+        };
 
-        return result.rows.map((row) => {
-            const access = {
-                allowsResidents: Boolean(row.allowsResidents),
-                allowsCommuters: Boolean(row.allowsCommuters),
-                allowsFaculty: Boolean(row.allowsFaculty),
-                allowsVisitors: Boolean(row.allowsVisitors),
-            };
-            return {
-                lotCode: row.lotCode,
-                lotName: row.lotName,
-                zoneType: inferZoneType(access),
-                occupancyPercent:
-                    row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
-                latestSnapshotTime:
-                    row.latestSnapshotTime != null
-                        ? (row.latestSnapshotTime as Date)
-                        : null,
-                sampleCount: Number(row.sampleCount),
-                allowedZones: allowedZonesForLot(access),
-            };
-        });
+        const targetHour = context?.targetHour ?? null;
+        const targetDayOfWeek = context?.targetDayOfWeek ?? null;
+        const contextRows = await runSummaryQuery(targetHour, targetDayOfWeek);
+
+        // If a forecast bucket has no samples at all, fall back to overall historical patterns.
+        const hasAnySamples = contextRows.some((row) => row.sampleCount > 0);
+        if (!hasAnySamples && (targetHour !== null || targetDayOfWeek !== null)) {
+            return runSummaryQuery(null, null);
+        }
+
+        return contextRows;
     }
 
     public static async getBusyLotsBeforeNineAm(
@@ -218,13 +233,11 @@ export class ParkingAnalyticsService {
         END AS "zoneType",
         ROUND(
           AVG(
-            LEAST(
-              100,
-              CASE
-                WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
-                ELSE (bnd.entry_count::numeric / lc.capacity::numeric) * 100
-              END
-            )
+            CASE
+              WHEN bnd.entry_count IS NULL THEN NULL
+              WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+              ELSE LEAST(100, (bnd.entry_count::numeric / lc.capacity::numeric) * 100)
+            END
           ),
           2
         ) AS "averageOccupancyPercent",
@@ -241,13 +254,11 @@ export class ParkingAnalyticsService {
         l.allowsvisitors
       HAVING ROUND(
         AVG(
-          LEAST(
-            100,
-            CASE
-              WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
-              ELSE (bnd.entry_count::numeric / lc.capacity::numeric) * 100
-            END
-          )
+          CASE
+            WHEN bnd.entry_count IS NULL THEN NULL
+            WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+            ELSE LEAST(100, (bnd.entry_count::numeric / lc.capacity::numeric) * 100)
+          END
         ),
         2
       ) >= $1
