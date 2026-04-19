@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "id": "Faculty-Lots",
+      "title": "Student Parking in Faculty Lots",
+      "audience": ["resident", "commuter"],
+      "lots": [2, 3, 4, 11, 13, 17],
+      "allowed": true,
+      "startTime": "16:30",
+      "endTime": "8:00",
+      "reason": "Students may park overnight in faculty lots."
+    },
+    {
+      "id": "Handicapped-Parking",
+      "title": "Handicapped Parking Permissions",
+      "audience": "handicapped",
+      "lots": ["ALL"],
+      "allowed": true,
+      "reason": "When no handicapped spots are available near their destination, handicapped individuals may park in any lot, regardless of usual permissions."
+    }
+  ]
+}
