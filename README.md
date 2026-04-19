@@ -33,6 +33,8 @@ Most of the parking **occupancy**, **lot list**, **busy-before-9**, and **recomm
 
 **Parking permits, fees, shuttle, and written parking policies** for the Ask feature are grounded in a **real, official** public source: Marist’s **[Parking FAQ](https://www.marist.edu/security/parking/faq)**. The backend downloads that page (on demand and on server start), stores a simplified plain-text cache under `server/data/` (see `officialParkingRulesService`), and answers matching “rules / permit” style questions only from retrieved FAQ excerpts. Optional OpenAI wording still must stay within those excerpts.
 
-**Important:** Always treat occupancy charts and “best lot” suggestions as **demo-backed**, and double-check any **policy or fee** answer on the live FAQ or Marist Parking pages if the stakes are high.
+**Athletics event awareness (Ask-the-AI only)** is a separate, lightweight advisory layer. For time- or future-shaped parking questions, the backend may read Marist’s official athletics **composite schedule** on **[goredfoxes.com](https://goredfoxes.com/calendar)** (JSON from the same official Sidearm endpoint the page uses). That signal only warns that **parking may be busier than usual** around a matched event window; it does **not** replace SQL-backed lot recommendations, does not assert lot closures or exact parking impact unless the athletics page explicitly did, and is ignored for permit-only FAQ routing.
+
+**Important:** Always treat occupancy charts and “best lot” suggestions as **demo-backed**, and double-check any **policy or fee** answer on the live FAQ or Marist Parking pages if the stakes are high. Treat athletics-linked notes as **helpful context from a real schedule**, not a guarantee about campus parking operations.
 
 A concise engineering summary also lives in **`design-docs/design-doc-current-build.md`**.
