@@ -42,7 +42,7 @@ npm run test-db
 | Script        | What it does |
 |---------------|----------------|
 | `db:init`     | Creates tables from `src/db/schema.sql` (via `psql`). |
-| `seed-db`     | Inserts demo lots `DEMO-N-01`, `DEMO-S-02`, `DEMO-E-03` and sample `parking_snapshots` rows for local demos and tests. Safe to re-run for those codes only. |
+| `seed-db`     | Inserts demo lots and sample `spaces`/`history` rows for local demos and tests (including alt codes `DEMO-N-01`, `DEMO-S-02`, `DEMO-E-03`). |
 | `test-db`     | Runs `SELECT NOW()` to verify the connection. |
 
 ## Seed data purpose
@@ -58,7 +58,7 @@ npm test
 ```
 
 - The Express app is built in **`src/app.ts`** and imported by **`src/index.ts`** (listen only) so tests can hit routes **without** opening a listening port.
-- Tests call the **real** read-only handlers and Postgres (same as local dev). They expect the seeded lot codes **`DEMO-N-01`**, **`DEMO-S-02`**, and **`DEMO-E-03`** to exist.
+- Tests call the **real** read-only handlers and Postgres (same as local dev). They expect seeded demo lots to exist (alt codes include **`DEMO-N-01`**, **`DEMO-S-02`**, **`DEMO-E-03`**).
 
 ## HTTP API
 
@@ -73,12 +73,12 @@ npm run start       # Run once with tsx
 | URL | Description |
 |-----|-------------|
 | [http://localhost:3001/health](http://localhost:3001/health) | Liveness JSON (`{ "status": "ok" }`). Port follows `PORT` or defaults to **3001** (see `src/config/env.ts`). |
-| [http://localhost:3001/api/parking/summary](http://localhost:3001/api/parking/summary) | Latest snapshot per lot (joins `parking_lots` + `parking_snapshots`; same idea as the seeded demo data). |
+| [http://localhost:3001/api/parking/summary](http://localhost:3001/api/parking/summary) | Forecasted lot busyness from historical snapshots. Optional query params: `hour` (0-23) and `dayOfWeek` (0=Sun..6=Sat). |
 | [http://localhost:3001/api/parking/busy-before-nine](http://localhost:3001/api/parking/busy-before-nine) | Lots with high average occupancy before 9:00 (query: `?threshold=90`). |
-| [http://localhost:3001/api/parking/lots](http://localhost:3001/api/parking/lots) | All rows from `parking_lots` (`id`, codes, names, zone). |
-| [http://localhost:3001/api/parking/snapshots/latest](http://localhost:3001/api/parking/snapshots/latest) | Latest `parking_snapshots` row per `lot_id` (raw snapshot columns). |
-| [http://localhost:3001/api/parking/lots/DEMO-N-01](http://localhost:3001/api/parking/lots/DEMO-N-01) | One lot by `lot_code`, with its latest snapshot object or `null`. |
-| `POST /api/parking/ask` | Ask routing: **occupancy-style** questions (recommendation, busy-before-9, lot list) from Postgres; **permit/rules** questions from cached plain text of the [official Marist Parking FAQ](https://www.marist.edu/security/parking/faq) (see `src/services/officialParkingRulesService.ts`); **time-shaped** parking questions may also attach **advisory** metadata from the [official Marist athletics composite schedule](https://goredfoxes.com/calendar) via `src/services/maristAthleticsScheduleService.ts` (does not replace SQL recommendations). |
+| [http://localhost:3001/api/parking/lots](http://localhost:3001/api/parking/lots) | All rows from `lots` (with API-facing lot code/name/zone mapping). |
+| [http://localhost:3001/api/parking/snapshots/latest](http://localhost:3001/api/parking/snapshots/latest) | Latest history-derived snapshot row per lot. |
+| [http://localhost:3001/api/parking/lots/DEMO-N-01](http://localhost:3001/api/parking/lots/DEMO-N-01) | One lot by API lot code (`altname` when present, otherwise `lotid`), with latest derived snapshot or `null`. |
+| `POST /api/parking/ask` | Ask routing: **forecast-style** questions (recommendation, busy-before-9, lot list) from historical Postgres snapshots; **permit/rules** questions from cached plain text of the [official Marist Parking FAQ](https://www.marist.edu/security/parking/faq) (see `src/services/officialParkingRulesService.ts`); **time-shaped** parking questions may also attach **advisory** metadata from the [official Marist athletics composite schedule](https://goredfoxes.com/calendar) via `src/services/maristAthleticsScheduleService.ts` (does not replace SQL recommendations). |
 | [http://localhost:3001/api-docs](http://localhost:3001/api-docs) | **Swagger UI** for all routes. |
 
 Quick checks with **curl** (use your real port if you changed `PORT`):
@@ -92,7 +92,7 @@ curl -s http://localhost:3001/api/parking/snapshots/latest
 curl -s http://localhost:3001/api/parking/lots/DEMO-N-01
 curl -s -X POST http://localhost:3001/api/parking/ask \
   -H "Content-Type: application/json" \
-  -d '{"question":"best faculty lot right now"}'
+  -d '{"question":"which faculty lot is usually best around 11am?"}'
 curl -s -X POST http://localhost:3001/api/parking/ask \
   -H "Content-Type: application/json" \
   -d '{"question":"How do student parking permits work?"}'

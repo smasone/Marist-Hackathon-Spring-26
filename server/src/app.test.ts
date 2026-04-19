@@ -128,10 +128,10 @@ describe("GET /api/parking/lots/:lotCode", () => {
 });
 
 describe("POST /api/parking/ask", () => {
-  it("returns a recommendation answer from live DB summaries", async () => {
+  it("returns a recommendation answer from historical forecast summaries", async () => {
     const res = await request(app)
       .post("/api/parking/ask")
-      .send({ question: "What is the best faculty lot right now?" });
+      .send({ question: "What faculty lot is usually best around 10am?" });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(
@@ -140,6 +140,7 @@ describe("POST /api/parking/ask", () => {
         answer: expect.any(String),
         data: expect.objectContaining({
           lotCode: expect.any(String),
+          sampleCount: expect.any(Number),
           reason: expect.any(String),
         }),
       })

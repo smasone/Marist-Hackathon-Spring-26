@@ -1,20 +1,43 @@
--- Development schema for the parking demo backend.
--- parking_snapshots = point-in-time occupancy readings per lot (joined to parking_lots).
+-- Development schema aligned to current Neon project tables.
 
-CREATE TABLE IF NOT EXISTS parking_lots (
-  id SERIAL PRIMARY KEY,
-  lot_code VARCHAR(64) NOT NULL UNIQUE,
-  lot_name VARCHAR(255) NOT NULL,
-  zone_type VARCHAR(64) NOT NULL
+CREATE TABLE IF NOT EXISTS lots (
+  lotid INTEGER PRIMARY KEY,
+  lotname TEXT NOT NULL UNIQUE,
+  altname TEXT UNIQUE,
+  allowsresidents BOOLEAN NOT NULL,
+  allowscommuters BOOLEAN NOT NULL,
+  allowsfaculty BOOLEAN NOT NULL,
+  allowsvisitors BOOLEAN NOT NULL,
+  CHECK (lotname <> altname)
 );
 
-CREATE TABLE IF NOT EXISTS parking_snapshots (
-  id SERIAL PRIMARY KEY,
-  lot_id INTEGER NOT NULL REFERENCES parking_lots (id) ON DELETE CASCADE,
-  occupancy_percent NUMERIC(5, 2) NOT NULL
-    CHECK (occupancy_percent >= 0 AND occupancy_percent <= 100),
-  snapshot_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS spaces (
+  spacenum INTEGER PRIMARY KEY,
+  lotid INTEGER NOT NULL REFERENCES lots(lotid),
+  ishandicap BOOLEAN NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_parking_snapshots_lot_snapshot
-  ON parking_snapshots (lot_id, snapshot_at);
+CREATE TABLE IF NOT EXISTS history (
+  spacenum INTEGER NOT NULL REFERENCES spaces(spacenum),
+  entrancetime TIMESTAMP NOT NULL,
+  exittime TIMESTAMP NOT NULL,
+  PRIMARY KEY (spacenum, entrancetime),
+  CHECK (entrancetime < exittime)
+);
+
+CREATE TABLE IF NOT EXISTS buildings (
+  buildingid INTEGER PRIMARY KEY,
+  buildingname TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS lotdistances (
+  lotid INTEGER NOT NULL REFERENCES lots(lotid),
+  buildingid INTEGER NOT NULL REFERENCES buildings(buildingid),
+  distancemeters INTEGER NOT NULL,
+  walkingminutes INTEGER NOT NULL,
+  PRIMARY KEY (lotid, buildingid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_spaces_lotid ON spaces(lotid);
+CREATE INDEX IF NOT EXISTS idx_history_spacenum_entrance ON history(spacenum, entrancetime);
+CREATE INDEX IF NOT EXISTS idx_history_entrance ON history(entrancetime);
