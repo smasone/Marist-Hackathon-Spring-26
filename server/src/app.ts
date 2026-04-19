@@ -10,11 +10,42 @@ import swaggerUi from "swagger-ui-express";
 import { env } from "./config/env";
 import {
   formatParkingAnswer,
+  formatParkingRulesFaqAnswer,
   type ParkingAskFormatIntent,
 } from "./services/openAiService";
+import {
+  isParkingRulesOrPermitQuestion,
+  loadOfficialParkingFaqText,
+  OFFICIAL_MARIST_PARKING_FAQ_URL,
+  OFFICIAL_PARKING_FAQ_PAGE_TITLE,
+  selectFaqExcerptsForQuestion,
+} from "./services/officialParkingRulesService";
 import { ParkingAnalyticsService } from "./services/parkingAnalyticsService";
 
 const app = express();
+
+/**
+ * Allow browsers on localhost (Vite dev/preview, other ports) to call the API directly.
+ * Same-origin `/api` via Vite proxy does not need CORS; `VITE_API_BASE_URL=http://localhost:3001` does.
+ */
+app.use((req, res, next) => {
+  const origin = req.get("Origin");
+  if (
+    origin &&
+    /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin.trim())
+  ) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,HEAD,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  }
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
 
 /**
@@ -206,6 +237,12 @@ function parseZonesFromQuestion(question: string): string[] {
   return zones;
 }
 
+/** Truncated single-line question for debug logs only. */
+function askLogPreview(q: string, max = 100): string {
+  const s = q.replace(/\s+/g, " ").trim();
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
+}
+
 /**
  * Uses OpenAI only for wording when `OPENAI_API_KEY` is set; otherwise returns the template.
  * On model/network errors, returns the deterministic fallback (backend remains authoritative).
@@ -221,7 +258,99 @@ async function parkingAnswerWithOptionalAiPhrasing(
     intent,
     facts,
   });
+  console.log("[ask] optionalDbAiPhrasing", {
+    intent,
+    usedOpenAi: phrased !== null,
+    openaiConfigured: Boolean(env.openaiApiKey),
+  });
   return phrased ?? fallbackAnswer;
+}
+
+const RULES_FAQ_GROUNDING_NOTE =
+  "Answer is based only on retrieved excerpts from the official Marist Parking FAQ; confirm details on the live page if needed.";
+
+/**
+ * Permit / policy answers: official FAQ text only (separate from DB occupancy).
+ */
+async function respondParkingRulesFaq(
+  question: string,
+  normalizedQuestion: string,
+  res: Response
+): Promise<void> {
+  console.log("[ask] parking_rules_faq: start", {
+    questionPreview: askLogPreview(question),
+  });
+  const load = await loadOfficialParkingFaqText();
+  console.log("[ask] parking_rules_faq: faq load", {
+    ok: load.ok,
+    plainTextChars: load.plainText?.length ?? 0,
+    servedFromStaleDiskCache: load.servedFromStaleDiskCache,
+  });
+  const sourceTitle = OFFICIAL_PARKING_FAQ_PAGE_TITLE;
+  const sourceUrl = OFFICIAL_MARIST_PARKING_FAQ_URL;
+  const lastCheckedAt = load.lastFetchedAt?.toISOString() ?? null;
+  const note = load.servedFromStaleDiskCache
+    ? `${RULES_FAQ_GROUNDING_NOTE} (Served from a saved on-disk copy of the FAQ because the live page could not be reached.)`
+    : RULES_FAQ_GROUNDING_NOTE;
+
+  const baseMeta = {
+    sourceType: "official_web" as const,
+    sourceTitle,
+    sourceUrl,
+    lastCheckedAt,
+    sources: [{ title: sourceTitle, url: sourceUrl }],
+    note,
+  };
+
+  if (!load.ok || !load.plainText) {
+    console.log("[ask] parking_rules_faq: response faqUnavailable=true");
+    res.json({
+      intent: "parking_rules_faq",
+      answer:
+        "The official parking FAQ could not be loaded right now. Please try again later, or read the Parking FAQ directly on Marist's website.",
+      ...baseMeta,
+      data: { matchedFaqExcerpts: [], faqUnavailable: true },
+    });
+    return;
+  }
+
+  const excerpts = selectFaqExcerptsForQuestion(normalizedQuestion, load.plainText);
+  const noMatchAnswer = "I couldn't verify that from the official parking FAQ.";
+
+  if (excerpts.length === 0) {
+    console.log("[ask] parking_rules_faq: response no excerpt match");
+    res.json({
+      intent: "parking_rules_faq",
+      answer: noMatchAnswer,
+      ...baseMeta,
+      data: { matchedFaqExcerpts: [] as string[] },
+    });
+    return;
+  }
+
+  const joined = excerpts.join("\n\n");
+  const clipped = joined.length > 800 ? `${joined.slice(0, 797)}...` : joined;
+  const deterministicAnswer = `${clipped}\n\nSource: ${sourceUrl}`;
+
+  const aiAnswer = await formatParkingRulesFaqAnswer({
+    userQuestion: question,
+    faqExcerpts: excerpts,
+    sourceUrl,
+  });
+
+  console.log("[ask] parking_rules_faq: response", {
+    excerptCount: excerpts.length,
+    usedOpenAi: aiAnswer !== null,
+    openaiConfigured: Boolean(env.openaiApiKey),
+    answerChars: (aiAnswer ?? deterministicAnswer).length,
+  });
+
+  res.json({
+    intent: "parking_rules_faq",
+    answer: aiAnswer ?? deterministicAnswer,
+    ...baseMeta,
+    data: { matchedFaqExcerpts: excerpts },
+  });
 }
 
 /**
@@ -394,11 +523,11 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  * /api/parking/ask:
  *   post:
  *     tags: [Parking]
- *     summary: Answers supported parking questions from DB-backed data only
+ *     summary: Answers supported parking questions from DB data and/or the official Marist Parking FAQ
  *     description: >
- *       Routing and facts always come from the database. When `OPENAI_API_KEY`
- *       is configured, the `answer` string may be rephrased for readability; otherwise
- *       a deterministic template is returned. Unsupported questions are unchanged.
+ *       Occupancy-style intents use Postgres. Permit/rules questions use text from
+ *       https://www.marist.edu/security/parking/faq (cached server-side). When `OPENAI_API_KEY`
+ *       is set, answers may be rephrased but must stay grounded on those sources.
  *     requestBody:
  *       required: true
  *       content:
@@ -421,6 +550,29 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *                   type: string
  *                 intent:
  *                   type: string
+ *                   description: e.g. recommendation, busy_before_nine, lots_list, parking_rules_faq, unsupported
+ *                 data:
+ *                   description: Optional — DB rows for analytics intents; matched FAQ excerpts for parking_rules_faq
+ *                 sourceType:
+ *                   type: string
+ *                   description: Present for parking_rules_faq (official_web)
+ *                 sourceTitle:
+ *                   type: string
+ *                 sourceUrl:
+ *                   type: string
+ *                 lastCheckedAt:
+ *                   type: string
+ *                   format: date-time
+ *                   nullable: true
+ *                 sources:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       title: { type: string }
+ *                       url: { type: string }
+ *                 note:
+ *                   type: string
  *       400:
  *         description: Missing question
  *       500:
@@ -438,13 +590,20 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     const normalizedQuestion = normalizeQuestion(question);
     const zones = parseZonesFromQuestion(normalizedQuestion);
 
+    console.log("[ask] POST /api/parking/ask", {
+      questionPreview: askLogPreview(question),
+      openaiConfigured: Boolean(env.openaiApiKey),
+    });
+
     if (
       normalizedQuestion.includes("best") ||
       normalizedQuestion.includes("recommend") ||
       normalizedQuestion.includes("where should")
     ) {
+      console.log("[ask] routed intent=recommendation", { zones });
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones);
       if (recommendation === null) {
+        console.log("[ask] recommendation: no snapshot data for zones");
         res.json({
           intent: "recommendation",
           answer:
@@ -483,6 +642,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       normalizedQuestion.includes("before 9") ||
       normalizedQuestion.includes("before nine")
     ) {
+      console.log("[ask] routed intent=busy_before_nine");
       const busyThreshold = 90;
       const rows = await ParkingAnalyticsService.getBusyLotsBeforeNineAm(busyThreshold);
       const fallbackAnswer =
@@ -513,11 +673,18 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       return;
     }
 
+    if (isParkingRulesOrPermitQuestion(normalizedQuestion)) {
+      console.log("[ask] routed intent=parking_rules_faq");
+      await respondParkingRulesFaq(question, normalizedQuestion, res);
+      return;
+    }
+
     if (
       normalizedQuestion.includes("how many") ||
       normalizedQuestion.includes("list") ||
       normalizedQuestion.includes("which lot")
     ) {
+      console.log("[ask] routed intent=lots_list");
       const lots = await ParkingAnalyticsService.getAllLots();
       const fallbackAnswer = `There are ${lots.length} lots in the database: ${lots
         .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
@@ -544,10 +711,11 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       return;
     }
 
+    console.log("[ask] routed intent=unsupported");
     res.json({
       intent: "unsupported",
       answer:
-        "I can answer supported parking questions about best lot recommendations, busy-before-9 trends, and lot lists using the current backend data.",
+        "I can answer supported questions about best lot recommendations, busy-before-9 trends, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page.",
     });
   } catch (error) {
     console.error("POST /api/parking/ask failed:", error);

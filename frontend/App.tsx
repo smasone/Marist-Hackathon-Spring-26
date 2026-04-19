@@ -144,6 +144,9 @@ export default function App() {
     try {
       const response = await askParking(question);
       setAskResult(response);
+      requestAnimationFrame(() => {
+        document.getElementById("ask-result")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
     } catch (err) {
       setAskError(err instanceof Error ? err.message : "Could not get an answer");
     } finally {
@@ -394,12 +397,19 @@ export default function App() {
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>Ask the AI</h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Questions are routed to <code>POST /api/parking/ask</code> and answered from backend data only.
+          Questions go to <code>POST /api/parking/ask</code>: lot occupancy and recommendations use the
+          app's database; permit and policy questions use Marist's official Parking FAQ when matched.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
             value={askInput}
             onChange={(e) => setAskInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void submitAsk();
+              }
+            }}
             placeholder="Try: best faculty lot right now?"
             style={{
               flex: 1,
@@ -429,6 +439,7 @@ export default function App() {
         {askError && <p style={{ color: "#b91c1c", marginBottom: 0 }}>{askError}</p>}
         {askResult && (
           <div
+            id="ask-result"
             style={{
               marginTop: 12,
               padding: 12,
@@ -437,7 +448,27 @@ export default function App() {
               border: "1px solid #e2e8f0",
             }}
           >
-            <p style={{ margin: 0, color: "#334155" }}>{askResult.answer}</p>
+            <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#64748b", fontWeight: 600 }}>
+              Intent: {askResult.intent}
+            </p>
+            <p style={{ margin: 0, color: "#334155", whiteSpace: "pre-wrap" }}>
+              {askResult.answer.trim() === ""
+                ? "(Empty answer from API — check backend logs and response shape.)"
+                : askResult.answer}
+            </p>
+            {askResult.sourceUrl && (
+              <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
+                {askResult.sourceTitle ?? "Source"}:{" "}
+                <a href={askResult.sourceUrl} target="_blank" rel="noreferrer">
+                  {askResult.sourceUrl}
+                </a>
+                {askResult.lastCheckedAt && (
+                  <span style={{ display: "block", marginTop: 4 }}>
+                    FAQ text last fetched: {new Date(askResult.lastCheckedAt).toLocaleString()}
+                  </span>
+                )}
+              </p>
+            )}
           </div>
         )}
       </div>
