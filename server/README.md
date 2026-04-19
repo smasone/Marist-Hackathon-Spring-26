@@ -78,7 +78,7 @@ npm run start       # Run once with tsx
 | [http://localhost:3001/api/parking/lots](http://localhost:3001/api/parking/lots) | All rows from `parking_lots` (`id`, codes, names, zone). |
 | [http://localhost:3001/api/parking/snapshots/latest](http://localhost:3001/api/parking/snapshots/latest) | Latest `parking_snapshots` row per `lot_id` (raw snapshot columns). |
 | [http://localhost:3001/api/parking/lots/DEMO-N-01](http://localhost:3001/api/parking/lots/DEMO-N-01) | One lot by `lot_code`, with its latest snapshot object or `null`. |
-| `POST /api/parking/ask` | Ask routing: **occupancy-style** questions (recommendation, busy-before-9, lot list) from Postgres; **permit/rules** questions from cached plain text of the [official Marist Parking FAQ](https://www.marist.edu/security/parking/faq) (see `src/services/officialParkingRulesService.ts`). |
+| `POST /api/parking/ask` | Ask routing: **occupancy-style** questions (recommendation, busy-before-9, lot list) from Postgres; **permit/rules** questions from cached plain text of the [official Marist Parking FAQ](https://www.marist.edu/security/parking/faq) (see `src/services/officialParkingRulesService.ts`); **time-shaped** parking questions may also attach **advisory** metadata from the [official Marist athletics composite schedule](https://goredfoxes.com/calendar) via `src/services/maristAthleticsScheduleService.ts` (does not replace SQL recommendations). |
 | [http://localhost:3001/api-docs](http://localhost:3001/api-docs) | **Swagger UI** for all routes. |
 
 Quick checks with **curl** (use your real port if you changed `PORT`):
@@ -103,6 +103,10 @@ curl -s -X POST http://localhost:3001/api/parking/ask \
 ## Official parking FAQ cache (rules / permits)
 
 The server may write **`server/data/marist-parking-faq-cache.json`** after a successful fetch of the public Marist Parking FAQ (plain-text extraction for Ask). That file is **gitignored**; `server/data/.gitkeep` keeps the folder in the repo. On startup, the server attempts a best-effort warm of this cache (non-fatal if the network is down).
+
+## Official athletics schedule cache (Ask advisory only)
+
+For time- or future-shaped **parking** questions, Ask may call the official Sidearm JSON calendar used by **`https://goredfoxes.com/calendar`**. Successful month payloads may be cached under **`server/data/marist-athletics-schedule-cache.json`** (also **gitignored**). Startup runs a non-fatal warm fetch for the current month alongside the FAQ warm.
 
 ## Useful commands
 

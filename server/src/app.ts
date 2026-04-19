@@ -20,6 +20,17 @@ import {
   OFFICIAL_PARKING_FAQ_PAGE_TITLE,
   selectFaqExcerptsForQuestion,
 } from "./services/officialParkingRulesService";
+import {
+  athleticsSupplementToResponseFields,
+  computeAthleticsAskSupplementForQuestion,
+  emptyAthleticsAskSupplement,
+  type AthleticsAskSupplement,
+} from "./services/maristAthleticsScheduleService";
+import {
+  mentionsCampusParkingContext,
+  shouldAddDemoTimelinessDisclaimer,
+  shouldConsiderAthleticsSchedule,
+} from "./services/questionTimeHeuristics";
 import { ParkingAnalyticsService } from "./services/parkingAnalyticsService";
 
 const app = express();
@@ -293,6 +304,42 @@ async function parkingAnswerWithOptionalAiPhrasing(
   }
 }
 
+const DEMO_TIMELINESS_PREFIX =
+  "Reminder: occupancy in this app uses current demo database snapshots from the backend, not a verified forecast for a specific future time. ";
+
+function withDemoTimelinessFallback(
+  normalizedQuestion: string,
+  fallbackAnswer: string
+): string {
+  if (!shouldAddDemoTimelinessDisclaimer(normalizedQuestion)) {
+    return fallbackAnswer;
+  }
+  return `${DEMO_TIMELINESS_PREFIX}${fallbackAnswer}`;
+}
+
+function mergeFactsWithTimelinessNote(
+  normalizedQuestion: string,
+  facts: Record<string, unknown>
+): Record<string, unknown> {
+  const f = { ...facts };
+  if (shouldAddDemoTimelinessDisclaimer(normalizedQuestion)) {
+    f.dataTimelinessNote =
+      "Occupancy figures in FACTS come from current demo database snapshots; they are not a verified forecast for a named future time in the question.";
+  }
+  return f;
+}
+
+function appendAthleticsSuffix(base: string, athletics: AthleticsAskSupplement): string {
+  const tail = athletics.answerSuffix?.trim();
+  if (!tail) {
+    return base;
+  }
+  if (base.includes(tail)) {
+    return base;
+  }
+  return `${base.trimEnd()} ${tail}`;
+}
+
 const RULES_FAQ_GROUNDING_NOTE =
   "Answer is based only on retrieved excerpts from the official Marist Parking FAQ; confirm details on the live page if needed.";
 
@@ -562,12 +609,16 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *     description: >
  *       Supported categories: (1) **Postgres occupancy** — questions containing best/recommend/where should
  *       (recommendation), busy before 9 / before nine (busy_before_nine), or list / how many / which lot
- *       (lots_list). (2) **Official FAQ** — permit, policy, shuttle, enforcement, and similar heuristics
- *       (`parking_rules_faq`) using cached plain text from https://www.marist.edu/security/parking/faq
- *       with stale on-disk fallback when the live page cannot be fetched. (3) **unsupported** — safe template
- *       when no route matches. When `OPENAI_API_KEY` is set, DB and FAQ answers may be rephrased; on missing key,
- *       HTTP/model errors, or unexpected failures, the API returns deterministic template or excerpt text so
- *       facts always come from SQL results or FAQ excerpts.
+ *       (lots_list), plus time-shaped campus parking questions routed like **recommendation** when the question
+ *       references a time/date but not the keywords above. (2) **Official FAQ** — permit, policy, shuttle,
+ *       enforcement, and similar heuristics (`parking_rules_faq`) using cached plain text from
+ *       https://www.marist.edu/security/parking/faq with stale on-disk fallback when the live page cannot be
+ *       fetched. (3) **unsupported** — safe template when no route matches. For occupancy intents, when the
+ *       question looks time- or future-shaped, the server may attach **advisory** metadata from Marist's
+ *       official athletics composite schedule (`https://goredfoxes.com/calendar` / Sidearm JSON); this never
+ *       replaces SQL-backed recommendations. When `OPENAI_API_KEY` is set, DB and FAQ answers may be rephrased;
+ *       on missing key, HTTP/model errors, or unexpected failures, the API returns deterministic template or
+ *       excerpt text so facts always come from SQL results or FAQ excerpts.
  *     requestBody:
  *       required: true
  *       content:
@@ -618,6 +669,28 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *                       url: { type: string }
  *                 note:
  *                   type: string
+ *                 eventSignalFound:
+ *                   type: boolean
+ *                   description: Present when an athletics schedule lookup ran for a time-shaped question
+ *                 eventImpactNote:
+ *                   type: string
+ *                   nullable: true
+ *                 eventSnippet:
+ *                   type: string
+ *                   nullable: true
+ *                 eventTitle:
+ *                   type: string
+ *                   nullable: true
+ *                 eventTime:
+ *                   type: string
+ *                   nullable: true
+ *                 eventSources:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       title: { type: string }
+ *                       url: { type: string }
  *       400:
  *         description: Missing/blank question, non-string question, or invalid JSON body
  *       500:
@@ -665,7 +738,10 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         });
         return;
       }
-      const fallbackAnswer = `Best current option: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`;
+      const fallbackAnswer = withDemoTimelinessFallback(
+        normalizedQuestion,
+        `Best current option: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`
+      );
       const facts = {
         zonesRequested: zones,
         selectedLot: {
@@ -677,16 +753,31 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           selectionReason: recommendation.reason,
         },
       };
+      let athletics: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athletics = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athletics = emptyAthleticsAskSupplement();
+      }
+      const factsForModel = mergeFactsWithTimelinessNote(normalizedQuestion, facts);
       const answer = await parkingAnswerWithOptionalAiPhrasing(
         question,
         "recommendation",
-        facts,
+        factsForModel,
         fallbackAnswer
       );
+      const finalAnswer = appendAthleticsSuffix(answer, athletics);
       res.json({
         intent: "recommendation",
-        answer,
+        answer: finalAnswer,
         data: recommendation,
+        ...athleticsSupplementToResponseFields(athletics),
       });
       return;
     }
@@ -699,10 +790,12 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       console.log("[ask] routed intent=busy_before_nine");
       const busyThreshold = 90;
       const rows = await ParkingAnalyticsService.getBusyLotsBeforeNineAm(busyThreshold);
-      const fallbackAnswer =
+      const fallbackAnswer = withDemoTimelinessFallback(
+        normalizedQuestion,
         rows.length === 0
           ? "No lots currently meet the 90% average occupancy threshold before 9 AM."
-          : `Before 9 AM, ${rows[0].lotName} (${rows[0].lotCode}) is the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`;
+          : `Before 9 AM, ${rows[0].lotName} (${rows[0].lotCode}) is the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`
+      );
       const facts = {
         occupancyThresholdPercent: busyThreshold,
         matchingLots: rows.map((row) => ({
@@ -713,16 +806,31 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           sampleCount: row.sampleCount,
         })),
       };
+      let athleticsBusy: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athleticsBusy = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athleticsBusy = emptyAthleticsAskSupplement();
+      }
+      const factsBusy = mergeFactsWithTimelinessNote(normalizedQuestion, facts);
       const answer = await parkingAnswerWithOptionalAiPhrasing(
         question,
         "busy_before_nine",
-        facts,
+        factsBusy,
         fallbackAnswer
       );
+      const finalAnswerBusy = appendAthleticsSuffix(answer, athleticsBusy);
       res.json({
         intent: "busy_before_nine",
-        answer,
+        answer: finalAnswerBusy,
         data: rows,
+        ...athleticsSupplementToResponseFields(athleticsBusy),
       });
       return;
     }
@@ -740,9 +848,12 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     ) {
       console.log("[ask] routed intent=lots_list");
       const lots = await ParkingAnalyticsService.getAllLots();
-      const fallbackAnswer = `There are ${lots.length} lots in the database: ${lots
-        .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
-        .join(", ")}.`;
+      const fallbackAnswer = withDemoTimelinessFallback(
+        normalizedQuestion,
+        `There are ${lots.length} lots in the database: ${lots
+          .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
+          .join(", ")}.`
+      );
       const facts = {
         totalCount: lots.length,
         lots: lots.map((lot) => ({
@@ -751,16 +862,106 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
           zoneType: lot.zoneType,
         })),
       };
+      let athleticsLots: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athleticsLots = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athleticsLots = emptyAthleticsAskSupplement();
+      }
+      const factsLots = mergeFactsWithTimelinessNote(normalizedQuestion, facts);
       const answer = await parkingAnswerWithOptionalAiPhrasing(
         question,
         "lots_list",
-        facts,
+        factsLots,
         fallbackAnswer
       );
+      const finalAnswerLots = appendAthleticsSuffix(answer, athleticsLots);
       res.json({
         intent: "lots_list",
-        answer,
+        answer: finalAnswerLots,
         data: lots,
+        ...athleticsSupplementToResponseFields(athleticsLots),
+      });
+      return;
+    }
+
+    if (
+      shouldConsiderAthleticsSchedule(normalizedQuestion) &&
+      mentionsCampusParkingContext(normalizedQuestion)
+    ) {
+      console.log("[ask] routed intent=recommendation (time-based parking context)");
+      const zones = parseZonesFromQuestion(normalizedQuestion);
+      const recommendation = await ParkingAnalyticsService.getRecommendation(zones);
+      if (recommendation === null) {
+        let athleticsOnly: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+        try {
+          athleticsOnly = await computeAthleticsAskSupplementForQuestion(
+            question,
+            normalizedQuestion
+          );
+        } catch (error) {
+          console.error("[ask] athletics supplement failed (non-fatal)", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          athleticsOnly = emptyAthleticsAskSupplement();
+        }
+        const baseNoData =
+          "I could not find a lot with current snapshot data for that request yet.";
+        const answerNoData = appendAthleticsSuffix(baseNoData, athleticsOnly);
+        res.json({
+          intent: "recommendation",
+          answer: answerNoData,
+          data: null,
+          ...athleticsSupplementToResponseFields(athleticsOnly),
+        });
+        return;
+      }
+      const fallbackAnswerTime = withDemoTimelinessFallback(
+        normalizedQuestion,
+        `Best current option from the app's database snapshots: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone at ${recommendation.occupancyPercent}% occupancy. ${recommendation.reason}`
+      );
+      const factsTime = {
+        zonesRequested: zones,
+        selectedLot: {
+          lotCode: recommendation.lotCode,
+          lotName: recommendation.lotName,
+          zoneType: recommendation.zoneType,
+          occupancyPercent: recommendation.occupancyPercent,
+          latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+          selectionReason: recommendation.reason,
+        },
+      };
+      let athleticsTime: AthleticsAskSupplement = emptyAthleticsAskSupplement();
+      try {
+        athleticsTime = await computeAthleticsAskSupplementForQuestion(
+          question,
+          normalizedQuestion
+        );
+      } catch (error) {
+        console.error("[ask] athletics supplement failed (non-fatal)", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        athleticsTime = emptyAthleticsAskSupplement();
+      }
+      const factsTimeForModel = mergeFactsWithTimelinessNote(normalizedQuestion, factsTime);
+      const answerTime = await parkingAnswerWithOptionalAiPhrasing(
+        question,
+        "recommendation",
+        factsTimeForModel,
+        fallbackAnswerTime
+      );
+      const finalAnswerTime = appendAthleticsSuffix(answerTime, athleticsTime);
+      res.json({
+        intent: "recommendation",
+        answer: finalAnswerTime,
+        data: recommendation,
+        ...athleticsSupplementToResponseFields(athleticsTime),
       });
       return;
     }
@@ -769,7 +970,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     res.json({
       intent: "unsupported",
       answer:
-        "I can answer supported questions about best lot recommendations, busy-before-9 trends, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page.",
+        "I can answer supported questions about best lot recommendations, busy-before-9 trends, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page. Time-based campus parking questions may also receive optional advisory context from Marist's official athletics composite schedule when they clearly mention parking and a time or date.",
       data: null,
     });
   } catch (error) {

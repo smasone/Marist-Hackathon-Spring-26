@@ -399,6 +399,8 @@ export default function App() {
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
           Questions go to <code>POST /api/parking/ask</code>: lot occupancy and recommendations use the
           app's database; permit and policy questions use Marist's official Parking FAQ when matched.
+          Time-based parking questions may also include optional advisory context from Marist's official
+          athletics composite schedule.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
@@ -456,7 +458,7 @@ export default function App() {
                 ? "(Empty answer from API — check backend logs and response shape.)"
                 : askResult.answer}
             </p>
-            {askResult.sourceUrl && (
+            {askResult.intent === "parking_rules_faq" && askResult.sourceUrl && (
               <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
                 {askResult.sourceTitle ?? "Source"}:{" "}
                 <a href={askResult.sourceUrl} target="_blank" rel="noreferrer">
@@ -465,6 +467,25 @@ export default function App() {
                 {askResult.lastCheckedAt && (
                   <span style={{ display: "block", marginTop: 4 }}>
                     FAQ text last fetched: {new Date(askResult.lastCheckedAt).toLocaleString()}
+                  </span>
+                )}
+              </p>
+            )}
+            {askResult.sourceType === "official_athletics_schedule" && askResult.sourceUrl && (
+              <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
+                Athletics schedule (advisory):{" "}
+                <a href={askResult.sourceUrl} target="_blank" rel="noreferrer">
+                  {askResult.sourceUrl}
+                </a>
+                {askResult.lastCheckedAt && (
+                  <span style={{ display: "block", marginTop: 4 }}>
+                    Schedule data last checked: {new Date(askResult.lastCheckedAt).toLocaleString()}
+                  </span>
+                )}
+                {askResult.eventTitle && (
+                  <span style={{ display: "block", marginTop: 4 }}>
+                    Matched event: {askResult.eventTitle}
+                    {askResult.eventTime ? ` (${askResult.eventTime})` : ""}
                   </span>
                 )}
               </p>

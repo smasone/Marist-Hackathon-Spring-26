@@ -58,6 +58,13 @@ export interface ParkingAskResponse {
   lastCheckedAt?: string | null;
   sources?: ParkingAskSourceRef[];
   note?: string;
+  /** Optional official athletics schedule advisory (occupancy intents, time-shaped questions). */
+  eventSignalFound?: boolean;
+  eventImpactNote?: string | null;
+  eventSnippet?: string | null;
+  eventTitle?: string | null;
+  eventTime?: string | null;
+  eventSources?: ParkingAskSourceRef[];
 }
 
 /**
