@@ -61,6 +61,15 @@ export interface ParkingAskResponse {
     selectionReason?: string;
     sampleCount?: number;
     latestSnapshotTime?: string;
+    lotNameMatch?: {
+      lotId: number;
+      lotCode: string;
+      lotName: string;
+      altName?: string | null;
+      matchSource: "lotName" | "altName";
+      matchType: "exact" | "prefix" | "contains";
+      score: number;
+    } | null;
   };
   data?: unknown;
   /** Present for `parking_rules_faq` intent. */

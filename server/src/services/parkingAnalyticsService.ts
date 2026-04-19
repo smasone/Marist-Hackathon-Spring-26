@@ -62,6 +62,25 @@ export interface ParkingForecastContext {
     targetDayOfWeek?: number | null;
 }
 
+export interface LotNameMatchRow {
+    lotId: number;
+    lotCode: string;
+    lotName: string;
+    altName: string | null;
+    matchSource: "lotName" | "altName";
+    matchType: "exact" | "prefix" | "contains";
+    score: number;
+}
+
+function normalizeLotQueryText(input: string): string {
+    return input
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 function inferZoneType(row: {
     allowsResidents: boolean;
     allowsCommuters: boolean;
@@ -103,6 +122,93 @@ function allowedZonesForLot(row: {
 }
 
 export class ParkingAnalyticsService {
+    public static async findBestLotNameMatch(
+        rawInput: string
+    ): Promise<LotNameMatchRow | null> {
+        const normalized = normalizeLotQueryText(rawInput);
+        if (normalized.length < 3) {
+            return null;
+        }
+        const result = await pool.query(
+            `
+      WITH input AS (
+        SELECT $1::text AS q
+      ),
+      lots_norm AS (
+        SELECT
+          l.lotid AS "lotId",
+          COALESCE(NULLIF(BTRIM(l.altname), ''), l.lotid::text) AS "lotCode",
+          l.lotname AS "lotName",
+          NULLIF(BTRIM(l.altname), '') AS "altName",
+          trim(regexp_replace(lower(replace(l.lotname, '&', ' and ')), '[^a-z0-9\\s]+', ' ', 'g')) AS lotname_norm,
+          trim(regexp_replace(lower(replace(COALESCE(l.altname, ''), '&', ' and ')), '[^a-z0-9\\s]+', ' ', 'g')) AS altname_norm
+        FROM lots l
+      )
+      SELECT
+        n."lotId",
+        n."lotCode",
+        n."lotName",
+        n."altName",
+        CASE
+          WHEN n.lotname_norm = i.q THEN 'lotName'
+          WHEN n.altname_norm = i.q THEN 'altName'
+          WHEN n.lotname_norm LIKE i.q || '%' THEN 'lotName'
+          WHEN n.altname_norm LIKE i.q || '%' THEN 'altName'
+          WHEN n.lotname_norm LIKE '%' || i.q || '%' THEN 'lotName'
+          WHEN n.altname_norm LIKE '%' || i.q || '%' THEN 'altName'
+          ELSE NULL
+        END AS "matchSource",
+        CASE
+          WHEN n.lotname_norm = i.q OR n.altname_norm = i.q THEN 'exact'
+          WHEN n.lotname_norm LIKE i.q || '%' OR n.altname_norm LIKE i.q || '%' THEN 'prefix'
+          ELSE 'contains'
+        END AS "matchType",
+        CASE
+          WHEN n.lotname_norm = i.q THEN 300
+          WHEN n.altname_norm = i.q THEN 290
+          WHEN n.lotname_norm LIKE i.q || '%' THEN 220
+          WHEN n.altname_norm LIKE i.q || '%' THEN 210
+          WHEN n.lotname_norm LIKE '%' || i.q || '%' THEN 140
+          WHEN n.altname_norm LIKE '%' || i.q || '%' THEN 130
+          ELSE 0
+        END::int AS score
+      FROM lots_norm n
+      CROSS JOIN input i
+      WHERE
+        n.lotname_norm = i.q
+        OR n.altname_norm = i.q
+        OR n.lotname_norm LIKE i.q || '%'
+        OR n.altname_norm LIKE i.q || '%'
+        OR n.lotname_norm LIKE '%' || i.q || '%'
+        OR n.altname_norm LIKE '%' || i.q || '%'
+      ORDER BY score DESC, n."lotName" ASC
+      LIMIT 1;
+      `,
+            [normalized]
+        );
+        if (result.rows.length === 0) {
+            return null;
+        }
+        const row = result.rows[0] as {
+            lotId: number;
+            lotCode: string;
+            lotName: string;
+            altName: string | null;
+            matchSource: "lotName" | "altName";
+            matchType: "exact" | "prefix" | "contains";
+            score: number | string;
+        };
+        return {
+            lotId: Number(row.lotId),
+            lotCode: row.lotCode,
+            lotName: row.lotName,
+            altName: row.altName,
+            matchSource: row.matchSource,
+            matchType: row.matchType,
+            score: Number(row.score),
+        };
+    }
+
     public static async getParkingLotSummaries(
         context?: ParkingForecastContext
     ): Promise<ParkingLotSummaryRow[]> {
