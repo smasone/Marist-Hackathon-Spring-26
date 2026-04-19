@@ -391,6 +391,30 @@ const DEMO_TIMELINESS_PREFIX =
 const FORECAST_DISCLAIMER =
   "This is a forecast based on stored historical parking data, not live sensor tracking.";
 
+const HIDDEN_LOT_IDENTIFIER_KEYS = new Set(["id", "lotId", "lotCode"]);
+
+function stripHiddenLotIdentifiers(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripHiddenLotIdentifiers(item));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const obj = value as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(obj)) {
+    if (HIDDEN_LOT_IDENTIFIER_KEYS.has(key)) {
+      continue;
+    }
+    sanitized[key] = stripHiddenLotIdentifiers(nested);
+  }
+  return sanitized;
+}
+
+function sendSanitizedAskResponse(res: Response, payload: Record<string, unknown>): void {
+  res.json(stripHiddenLotIdentifiers(payload));
+}
+
 function mergeFactsWithTimelinessNote(
   facts: Record<string, unknown>
 ): Record<string, unknown> {
@@ -462,14 +486,12 @@ function buildRecommendationSupportingDetails(
   recommendation: {
     occupancyPercent: number;
     zoneType: string;
-    lotCode: string;
   },
   inferredInstant: ReturnType<typeof inferReferenceInstantFromQuestion> | null
 ): string[] {
   const details = [
     `Expected occupancy: ${recommendation.occupancyPercent}% (${busynessCategory(recommendation.occupancyPercent)}).`,
     `Zone type: ${recommendation.zoneType}.`,
-    `Lot code: ${recommendation.lotCode}.`,
   ];
   if (inferredInstant?.inferredFromQuestion) {
     details.push(`Time context inferred from your question: ${inferredInstant.label}.`);
@@ -569,7 +591,7 @@ async function respondParkingRulesFaq(
 
   if (!load.ok || !load.plainText) {
     console.log("[ask] parking_rules_faq: response faqUnavailable=true");
-    res.json({
+    sendSanitizedAskResponse(res, {
       intent: "parking_rules_faq",
       answer:
         "The official parking FAQ could not be loaded right now. Please try again later, or read the Parking FAQ directly on Marist's website.",
@@ -584,7 +606,7 @@ async function respondParkingRulesFaq(
 
   if (excerpts.length === 0) {
     console.log("[ask] parking_rules_faq: response no excerpt match");
-    res.json({
+    sendSanitizedAskResponse(res, {
       intent: "parking_rules_faq",
       answer: noMatchAnswer,
       ...baseMeta,
@@ -618,7 +640,7 @@ async function respondParkingRulesFaq(
     answerChars: (aiAnswer ?? deterministicAnswer).length,
   });
 
-  res.json({
+  sendSanitizedAskResponse(res, {
     intent: "parking_rules_faq",
     answer: aiAnswer ?? deterministicAnswer,
     ...baseMeta,
@@ -966,7 +988,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         }
       );
       if (lotForecast === null || lotForecast.occupancyPercent === null) {
-        res.json({
+        sendSanitizedAskResponse(res, {
           intent: "lot_specific",
           answer: `I could not estimate a forecast for ${lotNameMatch.lotName} from stored historical snapshots yet.`,
           explanation:
@@ -1006,7 +1028,6 @@ const askParkingHandler = async (req: Request, res: Response) => {
           : null;
       const supportingDetails = [
         `Requested lot zone: ${lotForecast.zoneType}.`,
-        `Requested lot code: ${lotForecast.lotCode}.`,
         `Historical samples used: ${lotForecast.sampleCount}.`,
       ];
       if (destinationHint) {
@@ -1051,7 +1072,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         factsLotSpecific,
         lotAnswer
       );
-      res.json({
+      sendSanitizedAskResponse(res, {
         intent: "lot_specific",
         answer: phrasedLotAnswer,
         explanation: lotExplanation,
@@ -1078,7 +1099,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
       });
       if (recommendation === null) {
         console.log("[ask] recommendation: no historical forecast data for zones");
-        res.json({
+        sendSanitizedAskResponse(res, {
           intent: "recommendation",
           answer:
             "I could not estimate a lot forecast from historical snapshots for that request yet.",
@@ -1145,7 +1166,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         fallbackAnswer
       );
       const finalAnswer = appendAthleticsSuffix(answer, athletics);
-      res.json({
+      sendSanitizedAskResponse(res, {
         intent: "recommendation",
         answer: finalAnswer,
         explanation,
@@ -1188,7 +1209,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
       const fallbackAnswer =
         rows.length === 0
           ? `${DEMO_TIMELINESS_PREFIX}No lots in historical snapshots meet the 90% average occupancy threshold before 9 AM.`
-          : `${DEMO_TIMELINESS_PREFIX}Before 9 AM, historical patterns suggest ${rows[0].lotName} (${rows[0].lotCode}) is typically the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`;
+          : `${DEMO_TIMELINESS_PREFIX}Before 9 AM, historical patterns suggest ${rows[0].lotName} is typically the busiest at an average ${rows[0].averageOccupancyPercent}% occupancy.`;
       const facts = {
         occupancyThresholdPercent: busyThreshold,
         matchingLots: rows.map((row) => ({
@@ -1220,7 +1241,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         fallbackAnswer
       );
       const finalAnswerBusy = appendAthleticsSuffix(answer, athleticsBusy);
-      res.json({
+      sendSanitizedAskResponse(res, {
         intent: "busy_before_nine",
         answer: finalAnswerBusy,
         data: rows,
@@ -1243,7 +1264,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
       console.log("[ask] routed intent=lots_list");
       const lots = await ParkingAnalyticsService.getAllLots();
       const fallbackAnswer = `There are ${lots.length} lots in the database: ${lots
-        .map((lot) => `${lot.lotCode} (${lot.zoneType})`)
+        .map((lot) => `${lot.lotName} (${lot.zoneType})`)
         .join(", ")}.`;
       const facts = {
         totalCount: lots.length,
@@ -1274,7 +1295,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         fallbackAnswer
       );
       const finalAnswerLots = appendAthleticsSuffix(answer, athleticsLots);
-      res.json({
+      sendSanitizedAskResponse(res, {
         intent: "lots_list",
         answer: finalAnswerLots,
         data: lots,
@@ -1312,7 +1333,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         const baseNoData =
           "I could not estimate a lot forecast from historical snapshots for that request yet.";
         const answerNoData = appendAthleticsSuffix(baseNoData, athleticsOnly);
-        res.json({
+        sendSanitizedAskResponse(res, {
           intent: "recommendation",
           answer: answerNoData,
           data: null,
@@ -1382,7 +1403,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
         fallbackAnswerTime
       );
       const finalAnswerTime = appendAthleticsSuffix(answerTime, athleticsTime);
-      res.json({
+      sendSanitizedAskResponse(res, {
         intent: "recommendation",
         answer: finalAnswerTime,
         explanation: explanationTime,
@@ -1415,7 +1436,7 @@ const askParkingHandler = async (req: Request, res: Response) => {
     }
 
     console.log("[ask] routed intent=unsupported");
-    res.json({
+    sendSanitizedAskResponse(res, {
       intent: "unsupported",
       answer:
         "I can answer supported questions about forecasted lot recommendations, busy-before-9 trends from historical snapshots, and lot lists from the app's parking database, plus permit and parking policy topics from Marist's official Parking FAQ when your question matches that page. Time-based campus parking questions may also receive optional advisory context from Marist's official athletics composite schedule when they clearly mention parking and a time or date.",

@@ -19,6 +19,7 @@ export interface FormatParkingAnswerInput {
 }
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const HIDDEN_LOT_IDENTIFIER_KEYS = new Set(["id", "lotId", "lotCode"]);
 
 /** Short one-line preview for logs (never log full prompts in production volumes). */
 function logPreview(text: string, max = 96): string {
@@ -34,6 +35,24 @@ Rules:
 - If FACTS do not support a detail, do not mention it.
 - Reply in one or two short sentences, plain text, no markdown, no bullet lists.
 - Be helpful and natural, but never contradict FACTS.`;
+
+function stripHiddenLotIdentifiers(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripHiddenLotIdentifiers(item));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const source = value as Record<string, unknown>;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(source)) {
+    if (HIDDEN_LOT_IDENTIFIER_KEYS.has(key)) {
+      continue;
+    }
+    sanitized[key] = stripHiddenLotIdentifiers(nested);
+  }
+  return sanitized;
+}
 
 /**
  * Asks OpenAI to phrase a short answer from structured backend facts.
@@ -53,6 +72,7 @@ export async function formatParkingAnswer(
     return null;
   }
 
+  const sanitizedFacts = stripHiddenLotIdentifiers(input.facts);
   const body = {
     model: env.openaiModel,
     temperature: 0.2,
@@ -61,7 +81,7 @@ export async function formatParkingAnswer(
       { role: "system" as const, content: SYSTEM_PROMPT },
       {
         role: "user" as const,
-        content: `Question:\n${input.userQuestion}\n\nIntent:\n${input.intent}\n\nFACTS (authoritative JSON):\n${JSON.stringify(input.facts)}`,
+        content: `Question:\n${input.userQuestion}\n\nIntent:\n${input.intent}\n\nFACTS (authoritative JSON):\n${JSON.stringify(sanitizedFacts)}`,
       },
     ],
   };
@@ -71,7 +91,7 @@ export async function formatParkingAnswer(
     intent: input.intent,
     model: env.openaiModel,
     questionPreview: logPreview(input.userQuestion),
-    factsJsonChars: JSON.stringify(input.facts).length,
+    factsJsonChars: JSON.stringify(sanitizedFacts).length,
     requestBodyChars: JSON.stringify(body).length,
   });
 
