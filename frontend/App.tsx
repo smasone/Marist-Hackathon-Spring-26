@@ -97,9 +97,7 @@ export default function App() {
   const [clock, setClock] = useState("");
   const [time, setTime] = useState<TimeView>("now");
   const [apiLots, setApiLots] = useState<ForecastParkingLot[] | null>(null);
-  const [apiLoading, setApiLoading] = useState(true);
-  const [apiError, setApiError] = useState<string | null>(null);
-  const [showAccessibleOnly, setShowAccessibleOnly] = useState(false);
+  const showAccessibleOnly = false;
   const [askInput, setAskInput] = useState("");
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
@@ -138,8 +136,6 @@ export default function App() {
     let cancelled = false;
 
     async function loadSummary(): Promise<void> {
-      setApiLoading(true);
-      setApiError(null);
       try {
         const [summaryRows, lotRows] = await Promise.all([
           fetchParkingSummary({
@@ -162,14 +158,11 @@ export default function App() {
         }
       } catch (err) {
         if (!cancelled) {
-          setApiError(
-            err instanceof Error ? err.message : "Could not load summary",
+          console.error(
+            "Could not load parking summary",
+            err instanceof Error ? err.message : err,
           );
           setApiLots(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setApiLoading(false);
         }
       }
     }
@@ -347,178 +340,7 @@ export default function App() {
               {u}
             </button>
           ))}
-
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "10px 14px",
-              borderRadius: 10,
-              background: showAccessibleOnly ? "#fee2e2" : "#f8fafc",
-              border: "1px solid #e2e8f0",
-              fontWeight: 600,
-              color: "#334155",
-              cursor: "pointer",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={showAccessibleOnly}
-              onChange={(e) => setShowAccessibleOnly(e.target.checked)}
-            />
-            Show accessibility spaces
-          </label>
         </div>
-      </div>
-
-      <div
-        style={{
-          background: "white",
-          borderRadius: 20,
-          padding: 24,
-          boxShadow: "0 8px 20px rgba(0,0,0,.05)",
-          marginBottom: 24,
-        }}
-      >
-        <h2 style={{ color: "#be123c", marginTop: 0 }}>
-          Live lot summary (API)
-        </h2>
-        <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Data from{" "}
-          <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> and{" "}
-          <code style={{ fontSize: 13 }}>GET /api/parking/lots</code>.
-        </p>
-
-        {apiLoading && <p style={{ color: "#64748b" }}>Loading...</p>}
-        {apiError && (
-          <p style={{ color: "#b91c1c", fontWeight: 600 }}>
-            {apiError}
-            <span
-              style={{
-                display: "block",
-                fontWeight: 400,
-                fontSize: 14,
-                marginTop: 8,
-              }}
-            >
-              Start the server on port 3001 (see <code>server/README.md</code>){" "}
-              and use <code>npm run dev</code> here so Vite can proxy{" "}
-              <code>/api</code>, or set <code>VITE_API_BASE_URL</code>.
-            </span>
-          </p>
-        )}
-        {!apiLoading && !apiError && apiLots && apiLots.length === 0 && (
-          <p style={{ color: "#64748b" }}>
-            No lots returned yet (empty database or no rows).
-          </p>
-        )}
-        {!apiLoading && !apiError && apiLots && apiLots.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 14,
-              }}
-            >
-              <thead>
-                <tr style={{ textAlign: "left", color: "#64748b" }}>
-                  <th
-                    style={{
-                      padding: "8px 6px",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
-                  >
-                    Lot code
-                  </th>
-                  <th
-                    style={{
-                      padding: "8px 6px",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
-                  >
-                    Lot name
-                  </th>
-                  <th
-                    style={{
-                      padding: "8px 6px",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
-                  >
-                    Zone
-                  </th>
-                  <th
-                    style={{
-                      padding: "8px 6px",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
-                  >
-                    Occupancy %
-                  </th>
-                  <th
-                    style={{
-                      padding: "8px 6px",
-                      borderBottom: "1px solid #e2e8f0",
-                    }}
-                  >
-                    Latest snapshot
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {apiLots.map((row) => (
-                  <tr key={row.lotCode}>
-                    <td
-                      style={{
-                        padding: "10px 6px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.lotCode}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 6px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.lotName}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 6px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.zoneType}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 6px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.occupancyPercent === null
-                        ? "-"
-                        : `${row.occupancyPercent}%`}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 6px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      {row.latestSnapshotTime === null
-                        ? "-"
-                        : new Date(row.latestSnapshotTime).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </div>
 
       <div
@@ -569,9 +391,7 @@ export default function App() {
           }}
         >
           <h2 style={{ marginTop: 0, color: "#be123c" }}>Predicted Best Lot</h2>
-          <h3 style={{ marginBottom: 8 }}>
-            {bestLot.lotName} ({bestLot.lotCode})
-          </h3>
+          <h3 style={{ marginBottom: 8 }}>{bestLot.lotName}</h3>
 
           <p style={{ color: "#475569" }}>
             Expected occupancy:{" "}
@@ -812,7 +632,7 @@ export default function App() {
                 }}
               >
                 <strong>
-                  {lot.lotName} ({lot.lotCode})
+                  {lot.lotName}
                 </strong>
                 <strong
                   style={{
