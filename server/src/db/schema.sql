@@ -33,8 +33,7 @@ CREATE TABLE IF NOT EXISTS buildings (
 CREATE TABLE IF NOT EXISTS lotdistances (
   lotid INTEGER NOT NULL REFERENCES lots(lotid),
   buildingid INTEGER NOT NULL REFERENCES buildings(buildingid),
-  distancemeters INTEGER NOT NULL,
-  walkingminutes INTEGER NOT NULL,
+  distancescore INTEGER NOT NULL,
   PRIMARY KEY (lotid, buildingid)
 );
 

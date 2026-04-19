@@ -18,7 +18,7 @@ export interface ParkingLotSummaryRow {
     latestSnapshotTime: Date | null;
     sampleCount: number;
     allowedZones: string[];
-    walkingMinutes?: number | null;
+    distanceScore?: number | null;
 }
 
 export interface ParkingLotRow {
@@ -243,8 +243,8 @@ export class ParkingAnalyticsService {
                             : null,
                     sampleCount: Number(row.sampleCount),
                     allowedZones: allowedZonesForLot(access),
-                    walkingMinutes:
-                        row.walkingMinutes != null ? Number(row.walkingMinutes) : null,
+                    distanceScore:
+                        row.distanceScore != null ? Number(row.distanceScore) : null,
                 };
             });
 
@@ -311,7 +311,7 @@ export class ParkingAnalyticsService {
         ) AS "occupancyPercent",
         MAX(du.latest_time) AS "latestSnapshotTime",
         COUNT(du.usage_day)::int AS "sampleCount",
-        ld.walkingminutes AS "walkingMinutes"
+        ld.distancescore AS "distanceScore"
       FROM lots l
       LEFT JOIN lot_capacity lc ON lc.lotid = l.lotid
       LEFT JOIN daily_usage du ON du.lotid = l.lotid
@@ -324,7 +324,7 @@ export class ParkingAnalyticsService {
         l.allowscommuters,
         l.allowsfaculty,
         l.allowsvisitors,
-        ld.walkingminutes
+        ld.distancescore
       ORDER BY l.lotid ASC;
       `,
                 [targetHour, targetDayOfWeek, targetBuildingName]
@@ -768,7 +768,7 @@ export class ParkingAnalyticsService {
 
         let selected: ParkingLotSummaryRow;
         if (hasDestinationContext) {
-            const distanceCandidates = candidates.filter((row) => row.walkingMinutes != null);
+            const distanceCandidates = candidates.filter((row) => row.distanceScore != null);
             const withForecastedAvailability = distanceCandidates.filter(
                 (row) => (row.occupancyPercent as number) < 100
             );
@@ -779,10 +779,10 @@ export class ParkingAnalyticsService {
                       ? distanceCandidates
                       : candidates;
             pool.sort((a, b) => {
-                const byDistance = (a.walkingMinutes ?? Number.POSITIVE_INFINITY) -
-                    (b.walkingMinutes ?? Number.POSITIVE_INFINITY);
-                if (byDistance !== 0) {
-                    return byDistance;
+                const byDistanceScore = (a.distanceScore ?? Number.POSITIVE_INFINITY) -
+                    (b.distanceScore ?? Number.POSITIVE_INFINITY);
+                if (byDistanceScore !== 0) {
+                    return byDistanceScore;
                 }
                 return sortByOccupancyThenQuality(a, b);
             });
@@ -804,8 +804,8 @@ export class ParkingAnalyticsService {
                 ? ` on weekday index ${context.targetDayOfWeek}`
                 : "";
         const distanceSummary =
-            hasDestinationContext && selected.walkingMinutes != null
-                ? ` Destination-aware selection used estimated walking time (~${selected.walkingMinutes} minutes) and chose the closest lot with forecasted availability.`
+            hasDestinationContext && selected.distanceScore != null
+                ? ` Destination-aware selection prioritized the best proximity score (${selected.distanceScore}) and chose the closest lot with forecasted availability.`
                 : "";
         const decisionSummary = hasDestinationContext
             ? `Selected closest lot with forecasted availability among matching lots (${selected.sampleCount} historical samples).`
@@ -827,7 +827,7 @@ export class ParkingAnalyticsService {
 function computeRecommendationScore(row: {
     occupancyPercent: number | null;
     latestSnapshotTime: Date | null;
-    walkingMinutes?: number | null; // optional for future distance support
+    distanceScore?: number | null; // optional for proximity-aware recommendation scoring
 }): number {
     // If missing required data, treat as very bad candidate
     if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
@@ -838,13 +838,13 @@ function computeRecommendationScore(row: {
     const availabilityWeight = 0.4;
 
     // For now: fallback distance (you can replace this later with real data)
-    const walkingMinutes = row.walkingMinutes ?? 5;
+    const distanceScore = row.distanceScore ?? 5;
 
     // Convert occupancy → penalty (0 = empty, 1 = full)
     const availabilityPenalty = row.occupancyPercent / 100;
 
     const score =
-        walkingMinutes * distanceWeight +
+        distanceScore * distanceWeight +
         availabilityPenalty * availabilityWeight * 10;
 
     return score;
