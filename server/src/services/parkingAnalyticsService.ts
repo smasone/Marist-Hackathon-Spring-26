@@ -60,6 +60,17 @@ export interface ParkingRecommendationRow {
 export interface ParkingForecastContext {
     targetHour?: number | null;
     targetDayOfWeek?: number | null;
+    targetBuildingName?: string | null;
+}
+
+export interface LotForecastRow {
+    lotId: number;
+    lotCode: string;
+    lotName: string;
+    zoneType: string;
+    occupancyPercent: number | null;
+    latestSnapshotTime: Date | null;
+    sampleCount: number;
 }
 
 export interface LotNameMatchRow {
@@ -232,12 +243,15 @@ export class ParkingAnalyticsService {
                             : null,
                     sampleCount: Number(row.sampleCount),
                     allowedZones: allowedZonesForLot(access),
+                    walkingMinutes:
+                        row.walkingMinutes != null ? Number(row.walkingMinutes) : null,
                 };
             });
 
         const runSummaryQuery = async (
             targetHour: number | null,
-            targetDayOfWeek: number | null
+            targetDayOfWeek: number | null,
+            targetBuildingName: string | null
         ): Promise<ParkingLotSummaryRow[]> => {
             const result = await pool.query(
                 `
@@ -257,6 +271,26 @@ export class ParkingAnalyticsService {
         WHERE ($1::int IS NULL OR EXTRACT(HOUR FROM h.entrancetime) = $1)
           AND ($2::int IS NULL OR EXTRACT(DOW FROM h.entrancetime) = $2)
         GROUP BY s.lotid, DATE(h.entrancetime)
+      ),
+      target_building AS (
+        SELECT b.buildingid
+        FROM buildings b
+        WHERE
+          $3::text IS NOT NULL
+          AND LENGTH(BTRIM($3::text)) > 0
+          AND (
+            LOWER(b.buildingname) = LOWER($3::text)
+            OR LOWER(b.buildingname) LIKE LOWER($3::text) || '%'
+            OR LOWER(b.buildingname) LIKE '%' || LOWER($3::text) || '%'
+          )
+        ORDER BY
+          CASE
+            WHEN LOWER(b.buildingname) = LOWER($3::text) THEN 0
+            WHEN LOWER(b.buildingname) LIKE LOWER($3::text) || '%' THEN 1
+            ELSE 2
+          END,
+          LENGTH(b.buildingname) ASC
+        LIMIT 1
       )
       SELECT
         COALESCE(NULLIF(BTRIM(l.altname), ''), l.lotid::text) AS "lotCode",
@@ -276,32 +310,41 @@ export class ParkingAnalyticsService {
           2
         ) AS "occupancyPercent",
         MAX(du.latest_time) AS "latestSnapshotTime",
-        COUNT(du.usage_day)::int AS "sampleCount"
+        COUNT(du.usage_day)::int AS "sampleCount",
+        ld.walkingminutes AS "walkingMinutes"
       FROM lots l
       LEFT JOIN lot_capacity lc ON lc.lotid = l.lotid
       LEFT JOIN daily_usage du ON du.lotid = l.lotid
+      LEFT JOIN target_building tb ON TRUE
+      LEFT JOIN lotdistances ld ON ld.lotid = l.lotid AND ld.buildingid = tb.buildingid
       GROUP BY
         l.lotid,
         l.lotname,
         l.allowsresidents,
         l.allowscommuters,
         l.allowsfaculty,
-        l.allowsvisitors
+        l.allowsvisitors,
+        ld.walkingminutes
       ORDER BY l.lotid ASC;
       `,
-                [targetHour, targetDayOfWeek]
+                [targetHour, targetDayOfWeek, targetBuildingName]
             );
             return mapSummaryRows(result.rows);
         };
 
         const targetHour = context?.targetHour ?? null;
         const targetDayOfWeek = context?.targetDayOfWeek ?? null;
-        const contextRows = await runSummaryQuery(targetHour, targetDayOfWeek);
+        const targetBuildingName = context?.targetBuildingName ?? null;
+        const contextRows = await runSummaryQuery(
+            targetHour,
+            targetDayOfWeek,
+            targetBuildingName
+        );
 
         // If a forecast bucket has no samples at all, fall back to overall historical patterns.
         const hasAnySamples = contextRows.some((row) => row.sampleCount > 0);
         if (!hasAnySamples && (targetHour !== null || targetDayOfWeek !== null)) {
-            return runSummaryQuery(null, null);
+            return runSummaryQuery(null, null, targetBuildingName);
         }
 
         return contextRows;
@@ -568,6 +611,110 @@ export class ParkingAnalyticsService {
         };
     }
 
+    public static async getLotForecastByLotId(
+        lotId: number,
+        context?: ParkingForecastContext
+    ): Promise<LotForecastRow | null> {
+        const runForecastQuery = async (
+            targetHour: number | null,
+            targetDayOfWeek: number | null
+        ): Promise<LotForecastRow | null> => {
+            const result = await pool.query(
+                `
+      WITH lot_capacity AS (
+        SELECT lotid, COUNT(*)::int AS capacity
+        FROM spaces
+        GROUP BY lotid
+      ),
+      daily_usage AS (
+        SELECT
+          s.lotid,
+          DATE(h.entrancetime) AS usage_day,
+          COUNT(*)::int AS entry_count,
+          MAX(h.entrancetime) AS latest_time
+        FROM history h
+        INNER JOIN spaces s ON s.spacenum = h.spacenum
+        WHERE ($2::int IS NULL OR EXTRACT(HOUR FROM h.entrancetime) = $2)
+          AND ($3::int IS NULL OR EXTRACT(DOW FROM h.entrancetime) = $3)
+        GROUP BY s.lotid, DATE(h.entrancetime)
+      )
+      SELECT
+        l.lotid AS "lotId",
+        COALESCE(NULLIF(BTRIM(l.altname), ''), l.lotid::text) AS "lotCode",
+        l.lotname AS "lotName",
+        CASE
+          WHEN (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty AND NOT l.allowsvisitors THEN 'student'
+          WHEN l.allowsfaculty AND NOT (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsvisitors THEN 'faculty'
+          WHEN l.allowsvisitors AND NOT (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty THEN 'visitor'
+          WHEN (l.allowsresidents OR l.allowscommuters OR l.allowsfaculty OR l.allowsvisitors) THEN 'mixed'
+          ELSE 'unknown'
+        END AS "zoneType",
+        ROUND(
+          AVG(
+            CASE
+              WHEN du.entry_count IS NULL THEN NULL
+              WHEN lc.capacity IS NULL OR lc.capacity = 0 THEN 0
+              ELSE LEAST(100, (du.entry_count::numeric / lc.capacity::numeric) * 100)
+            END
+          ),
+          2
+        ) AS "occupancyPercent",
+        MAX(du.latest_time) AS "latestSnapshotTime",
+        COUNT(du.usage_day)::int AS "sampleCount"
+      FROM lots l
+      LEFT JOIN lot_capacity lc ON lc.lotid = l.lotid
+      LEFT JOIN daily_usage du ON du.lotid = l.lotid
+      WHERE l.lotid = $1
+      GROUP BY
+        l.lotid,
+        l.lotname,
+        l.allowsresidents,
+        l.allowscommuters,
+        l.allowsfaculty,
+        l.allowsvisitors;
+      `,
+                [lotId, targetHour, targetDayOfWeek]
+            );
+            if (result.rows.length === 0) {
+                return null;
+            }
+            const row = result.rows[0] as {
+                lotId: number | string;
+                lotCode: string;
+                lotName: string;
+                zoneType: string;
+                occupancyPercent: number | string | null;
+                latestSnapshotTime: Date | null;
+                sampleCount: number | string;
+            };
+            return {
+                lotId: Number(row.lotId),
+                lotCode: row.lotCode,
+                lotName: row.lotName,
+                zoneType: row.zoneType,
+                occupancyPercent:
+                    row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
+                latestSnapshotTime: row.latestSnapshotTime,
+                sampleCount: Number(row.sampleCount),
+            };
+        };
+
+        const targetHour = context?.targetHour ?? null;
+        const targetDayOfWeek = context?.targetDayOfWeek ?? null;
+        const contextualRow = await runForecastQuery(targetHour, targetDayOfWeek);
+        if (!contextualRow) {
+            return null;
+        }
+
+        if (
+            contextualRow.sampleCount <= 0 &&
+            (targetHour !== null || targetDayOfWeek !== null)
+        ) {
+            return runForecastQuery(null, null);
+        }
+        return contextualRow;
+    }
+
     public static async getRecommendation(
         allowedZones?: string[],
         context?: ParkingForecastContext
@@ -598,19 +745,13 @@ export class ParkingAnalyticsService {
             return null;
         }
 
-        candidates.sort((a, b) => {
-            const aHasDistance = a.walkingMinutes != null;
-            const bHasDistance = b.walkingMinutes != null;
-
-            // Preserve teammate logic when both candidates include distance context.
-            if (aHasDistance && bHasDistance) {
-                const scoreA = computeRecommendationScore(a);
-                const scoreB = computeRecommendationScore(b);
-                if (scoreA !== scoreB) {
-                    return scoreA - scoreB;
-                }
-            }
-
+        const hasDestinationContext = Boolean(
+            context?.targetBuildingName && context.targetBuildingName.trim().length > 0
+        );
+        const sortByOccupancyThenQuality = (
+            a: ParkingLotSummaryRow,
+            b: ParkingLotSummaryRow
+        ): number => {
             const byOccupancy = (a.occupancyPercent as number) - (b.occupancyPercent as number);
             if (byOccupancy !== 0) {
                 return byOccupancy;
@@ -623,9 +764,33 @@ export class ParkingAnalyticsService {
                 (b.latestSnapshotTime as Date).getTime() -
                 (a.latestSnapshotTime as Date).getTime()
             );
-        });
+        };
 
-        const selected = candidates[0];
+        let selected: ParkingLotSummaryRow;
+        if (hasDestinationContext) {
+            const distanceCandidates = candidates.filter((row) => row.walkingMinutes != null);
+            const withForecastedAvailability = distanceCandidates.filter(
+                (row) => (row.occupancyPercent as number) < 100
+            );
+            const pool =
+                withForecastedAvailability.length > 0
+                    ? withForecastedAvailability
+                    : distanceCandidates.length > 0
+                      ? distanceCandidates
+                      : candidates;
+            pool.sort((a, b) => {
+                const byDistance = (a.walkingMinutes ?? Number.POSITIVE_INFINITY) -
+                    (b.walkingMinutes ?? Number.POSITIVE_INFINITY);
+                if (byDistance !== 0) {
+                    return byDistance;
+                }
+                return sortByOccupancyThenQuality(a, b);
+            });
+            selected = pool[0];
+        } else {
+            candidates.sort(sortByOccupancyThenQuality);
+            selected = candidates[0];
+        }
         const zoneSummary =
             zoneSet && zoneSet.size > 0
                 ? `Eligible by zone filter from your question: ${[...zoneSet].sort().join(", ")}. `
@@ -639,10 +804,13 @@ export class ParkingAnalyticsService {
                 ? ` on weekday index ${context.targetDayOfWeek}`
                 : "";
         const distanceSummary =
-            selected.walkingMinutes != null
-                ? ` Distance-aware scoring was applied with ~${selected.walkingMinutes} walking minutes context.`
+            hasDestinationContext && selected.walkingMinutes != null
+                ? ` Destination-aware selection used estimated walking time (~${selected.walkingMinutes} minutes) and chose the closest lot with forecasted availability.`
                 : "";
-        const reason = `${zoneSummary}${contextSummary}${daySummary}. Selected for lowest expected occupancy among matching lots (${selected.sampleCount} historical samples); ties favor stronger sample coverage, then newer supporting snapshots.${distanceSummary}`;
+        const decisionSummary = hasDestinationContext
+            ? `Selected closest lot with forecasted availability among matching lots (${selected.sampleCount} historical samples).`
+            : `Selected for lowest expected occupancy among matching lots (${selected.sampleCount} historical samples); ties favor stronger sample coverage, then newer supporting snapshots.`;
+        const reason = `${zoneSummary}${contextSummary}${daySummary}. ${decisionSummary}${distanceSummary}`;
         return {
             lotCode: selected.lotCode,
             lotName: selected.lotName,

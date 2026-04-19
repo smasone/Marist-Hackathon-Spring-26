@@ -54,6 +54,36 @@ export interface ParkingAskResponse {
   explanation?: string;
   disclaimer?: string;
   supportingDetails?: string[];
+  lotSpecificMeta?: {
+    lotNameMatch: {
+      lotId: number;
+      lotCode: string;
+      lotName: string;
+      altName?: string | null;
+      matchSource: "lotName" | "altName";
+      matchType: "exact" | "prefix" | "contains";
+      score: number;
+    } | null;
+    lotForecast: {
+      lotId: number;
+      lotCode: string;
+      lotName: string;
+      zoneType: string;
+      occupancyPercent: number | null;
+      latestSnapshotTime: string | null;
+      sampleCount: number;
+    } | null;
+  };
+  alternativeRecommendation?: {
+    lotCode: string;
+    lotName: string;
+    zoneType: string;
+    occupancyPercent: number;
+    latestSnapshotTime: string;
+    sampleCount: number;
+    reason: string;
+  } | null;
+  comparisonDeltaPercent?: number | null;
   recommendationMeta?: {
     inferredTimeContext?: string | null;
     inferredTimeContextIso?: string | null;
