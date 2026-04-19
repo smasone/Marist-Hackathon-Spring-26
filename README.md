@@ -1,6 +1,13 @@
 # Marist-Hackathon-Spring-26
 
-Hackathon workspace.
+## Team
+Sophia Masone  
+Joanna Picciano  
+Lena Ishimwe  
+
+## Project concept
+
+This project is a smart campus parking helper designed to make parking decisions easier for students, faculty, and visitors. The idea is to collect and store parking lot occupancy data over time, use that data to show current and historical parking conditions, and provide recommendations for where to park based on availability patterns. We also planned an AI assistant layer that can answer parking-related questions by referencing the tracked data, helping users ask things in plain language instead of only clicking through dashboards or lists.  
 
 ## Backend
 
