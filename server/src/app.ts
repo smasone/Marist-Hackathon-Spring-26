@@ -261,6 +261,9 @@ function parseZonesFromQuestion(question: string): string[] {
   if (question.includes("visitor")) {
     zones.push("visitor");
   }
+  // Recommendation filtering currently uses umbrella zone buckets:
+  // - student (resident + commuter), faculty, visitor.
+  // So commuter/resident wording intentionally maps to "student".
   if (
     question.includes("student") ||
     question.includes("commuter") ||
