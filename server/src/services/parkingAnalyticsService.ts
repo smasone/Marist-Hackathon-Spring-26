@@ -153,7 +153,7 @@ export class ParkingAnalyticsService {
         GROUP BY s.lotid, DATE(h.entrancetime)
       )
       SELECT
-        COALESCE(l.altname, l.lotid::text) AS "lotCode",
+        COALESCE(NULLIF(BTRIM(l.altname), ''), l.lotid::text) AS "lotCode",
         l.lotname AS "lotName",
         l.allowsresidents AS "allowsResidents",
         l.allowscommuters AS "allowsCommuters",
@@ -222,7 +222,7 @@ export class ParkingAnalyticsService {
         GROUP BY s.lotid, DATE(h.entrancetime)
       )
       SELECT
-        COALESCE(l.altname, l.lotid::text) AS "lotCode",
+        COALESCE(NULLIF(BTRIM(l.altname), ''), l.lotid::text) AS "lotCode",
         l.lotname AS "lotName",
         CASE
           WHEN (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty AND NOT l.allowsvisitors THEN 'student'
@@ -281,7 +281,7 @@ export class ParkingAnalyticsService {
             `
       SELECT
         lotid AS id,
-        COALESCE(altname, lotid::text) AS "lotCode",
+        COALESCE(NULLIF(BTRIM(altname), ''), lotid::text) AS "lotCode",
         lotname AS "lotName",
         CASE
           WHEN (allowsresidents OR allowscommuters) AND NOT allowsfaculty AND NOT allowsvisitors THEN 'student'
@@ -397,7 +397,7 @@ export class ParkingAnalyticsService {
       )
       SELECT
         l.lotid AS "id",
-        COALESCE(l.altname, l.lotid::text) AS "lotCode",
+        COALESCE(NULLIF(BTRIM(l.altname), ''), l.lotid::text) AS "lotCode",
         l.lotname AS "lotName",
         CASE
           WHEN (l.allowsresidents OR l.allowscommuters) AND NOT l.allowsfaculty AND NOT l.allowsvisitors THEN 'student'
