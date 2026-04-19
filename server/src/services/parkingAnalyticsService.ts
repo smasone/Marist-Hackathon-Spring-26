@@ -478,7 +478,28 @@ export class ParkingAnalyticsService {
 
         if (candidates.length === 0) {
             return null;
+    /**
+     * Picks a simple "best" lot from current DB summaries.
+     * Considers lowest occupancy and closest distance to location (if applicable); ties are broken by newer snapshot.
+     */
+    public static async getRecommendation(
+    allowedZones?: string[]
+): Promise<ParkingRecommendationRow | null> {
+    const summaries = await this.getParkingLotSummaries();
+    const zoneSet =
+        allowedZones && allowedZones.length > 0
+            ? new Set(allowedZones.map((zone) => zone.toLowerCase()))
+            : null;
+
+    const candidates = summaries.filter((row) => {
+        if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
+            return false;
         }
+        if (!zoneSet) {
+            return true;
+        }
+        return zoneSet.has(row.zoneType.toLowerCase());
+    });
 
         candidates.sort((a, b) => {
             const byOccupancy = (a.occupancyPercent as number) - (b.occupancyPercent as number);
@@ -518,5 +539,71 @@ export class ParkingAnalyticsService {
             sampleCount: selected.sampleCount,
             reason,
         };
+    if (candidates.length === 0) {
+        return null;
     }
+
+    // NEW: scoring-based sort
+    candidates.sort((a, b) => {
+        const scoreA = computeRecommendationScore(a);
+        const scoreB = computeRecommendationScore(b);
+
+        if (scoreA !== scoreB) {
+            return scoreA - scoreB;
+        }
+
+        // tie-breaker: newer snapshot wins
+        return (
+            (b.latestSnapshotTime as Date).getTime() -
+            (a.latestSnapshotTime as Date).getTime()
+        );
+    });
+
+    const selected = candidates[0];
+
+    const zoneSummary =
+        zoneSet && zoneSet.size > 0
+            ? `Eligible by zone filter from your question: ${[...zoneSet]
+                  .sort()
+                  .join(", ")}. `
+            : "No zone filter applied (all zone types considered). ";
+
+    const reason = `${zoneSummary}Chosen based on a combined score that prioritizes lower occupancy while balancing proximity (when available). Ties are broken by the most recent snapshot.`;
+
+    return {
+        lotCode: selected.lotCode,
+        lotName: selected.lotName,
+        zoneType: selected.zoneType,
+        occupancyPercent: Number(selected.occupancyPercent),
+        latestSnapshotTime: selected.latestSnapshotTime as Date,
+        reason,
+    };
+} 
+
+}
+
+function computeRecommendationScore(row: {
+    occupancyPercent: number | null;
+    latestSnapshotTime: Date | null;
+    walkingMinutes?: number; // optional for future distance support
+}): number {
+    // If missing required data, treat as very bad candidate
+    if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const distanceWeight = 0.6;
+    const availabilityWeight = 0.4;
+
+    // For now: fallback distance (you can replace this later with real data)
+    const walkingMinutes = row.walkingMinutes ?? 5;
+
+    // Convert occupancy → penalty (0 = empty, 1 = full)
+    const availabilityPenalty = row.occupancyPercent / 100;
+
+    const score =
+        walkingMinutes * distanceWeight +
+        availabilityPenalty * availabilityWeight * 10;
+
+    return score;
 }
