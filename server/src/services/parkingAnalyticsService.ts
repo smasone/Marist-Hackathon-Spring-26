@@ -3,134 +3,134 @@ import { getPool } from "../db/client";
 const pool = getPool();
 
 export interface BusyLotBeforeNineRow {
-    lotCode: string;
-    lotName: string;
-    zoneType: string;
-    averageOccupancyPercent: number;
-    sampleCount: number;
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
+  averageOccupancyPercent: number;
+  sampleCount: number;
 }
 
 export interface ParkingLotSummaryRow {
-    lotCode: string;
-    lotName: string;
-    zoneType: string;
-    occupancyPercent: number | null;
-    latestSnapshotTime: Date | null;
-    sampleCount: number;
-    allowedZones: string[];
-    walkingMinutes?: number | null;
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
+  occupancyPercent: number | null;
+  latestSnapshotTime: Date | null;
+  sampleCount: number;
+  allowedZones: string[];
+  walkingMinutes?: number | null;
 }
 
 export interface ParkingLotRow {
-    id: number;
-    lotCode: string;
-    lotName: string;
-    zoneType: string;
+  id: number;
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
 }
 
 export interface LatestSnapshotPerLotRow {
-    id: number;
-    lotId: number;
-    occupancyPercent: number;
-    snapshotAt: Date;
+  id: number;
+  lotId: number;
+  occupancyPercent: number;
+  snapshotAt: Date;
 }
 
 export interface LotDetailRow {
+  id: number;
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
+  latestSnapshot: {
     id: number;
-    lotCode: string;
-    lotName: string;
-    zoneType: string;
-    latestSnapshot: {
-        id: number;
-        occupancyPercent: number;
-        snapshotAt: Date;
-    } | null;
+    occupancyPercent: number;
+    snapshotAt: Date;
+  } | null;
 }
 
 export interface ParkingRecommendationRow {
-    lotCode: string;
-    lotName: string;
-    zoneType: string;
-    occupancyPercent: number;
-    latestSnapshotTime: Date;
-    sampleCount: number;
-    reason: string;
+  lotCode: string;
+  lotName: string;
+  zoneType: string;
+  occupancyPercent: number;
+  latestSnapshotTime: Date;
+  sampleCount: number;
+  reason: string;
 }
 
 export interface ParkingForecastContext {
-    targetHour?: number | null;
-    targetDayOfWeek?: number | null;
+  targetHour?: number | null;
+  targetDayOfWeek?: number | null;
 }
 
 export interface LotNameMatchRow {
-    lotId: number;
-    lotCode: string;
-    lotName: string;
-    altName: string | null;
-    matchSource: "lotName" | "altName";
-    matchType: "exact" | "prefix" | "contains";
-    score: number;
+  lotId: number;
+  lotCode: string;
+  lotName: string;
+  altName: string | null;
+  matchSource: "lotName" | "altName";
+  matchType: "exact" | "prefix" | "contains";
+  score: number;
 }
 
 function normalizeLotQueryText(input: string): string {
-    return input
-        .toLowerCase()
-        .replace(/&/g, " and ")
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+  return input
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function inferZoneType(row: {
-    allowsResidents: boolean;
-    allowsCommuters: boolean;
-    allowsFaculty: boolean;
-    allowsVisitors: boolean;
+  allowsResidents: boolean;
+  allowsCommuters: boolean;
+  allowsFaculty: boolean;
+  allowsVisitors: boolean;
 }): string {
-    const studentAllowed = row.allowsResidents || row.allowsCommuters;
-    const zones = [
-        studentAllowed ? "student" : null,
-        row.allowsFaculty ? "faculty" : null,
-        row.allowsVisitors ? "visitor" : null,
-    ].filter((z): z is string => z !== null);
-    if (zones.length === 1) {
-        return zones[0];
-    }
-    if (zones.length === 0) {
-        return "unknown";
-    }
-    return "mixed";
+  const studentAllowed = row.allowsResidents || row.allowsCommuters;
+  const zones = [
+    studentAllowed ? "student" : null,
+    row.allowsFaculty ? "faculty" : null,
+    row.allowsVisitors ? "visitor" : null,
+  ].filter((z): z is string => z !== null);
+  if (zones.length === 1) {
+    return zones[0];
+  }
+  if (zones.length === 0) {
+    return "unknown";
+  }
+  return "mixed";
 }
 
 function allowedZonesForLot(row: {
-    allowsResidents: boolean;
-    allowsCommuters: boolean;
-    allowsFaculty: boolean;
-    allowsVisitors: boolean;
+  allowsResidents: boolean;
+  allowsCommuters: boolean;
+  allowsFaculty: boolean;
+  allowsVisitors: boolean;
 }): string[] {
-    const out: string[] = [];
-    if (row.allowsResidents || row.allowsCommuters) {
-        out.push("student");
-    }
-    if (row.allowsFaculty) {
-        out.push("faculty");
-    }
-    if (row.allowsVisitors) {
-        out.push("visitor");
-    }
-    return out;
+  const out: string[] = [];
+  if (row.allowsResidents || row.allowsCommuters) {
+    out.push("student");
+  }
+  if (row.allowsFaculty) {
+    out.push("faculty");
+  }
+  if (row.allowsVisitors) {
+    out.push("visitor");
+  }
+  return out;
 }
 
 export class ParkingAnalyticsService {
-    public static async findBestLotNameMatch(
-        rawInput: string
-    ): Promise<LotNameMatchRow | null> {
-        const normalized = normalizeLotQueryText(rawInput);
-        if (normalized.length < 3) {
-            return null;
-        }
-        const result = await pool.query(
-            `
+  public static async findBestLotNameMatch(
+    rawInput: string,
+  ): Promise<LotNameMatchRow | null> {
+    const normalized = normalizeLotQueryText(rawInput);
+    if (normalized.length < 3) {
+      return null;
+    }
+    const result = await pool.query(
+      `
       WITH input AS (
         SELECT $1::text AS q
       ),
@@ -184,63 +184,63 @@ export class ParkingAnalyticsService {
       ORDER BY score DESC, n."lotName" ASC
       LIMIT 1;
       `,
-            [normalized]
-        );
-        if (result.rows.length === 0) {
-            return null;
-        }
-        const row = result.rows[0] as {
-            lotId: number;
-            lotCode: string;
-            lotName: string;
-            altName: string | null;
-            matchSource: "lotName" | "altName";
-            matchType: "exact" | "prefix" | "contains";
-            score: number | string;
+      [normalized],
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    const row = result.rows[0] as {
+      lotId: number;
+      lotCode: string;
+      lotName: string;
+      altName: string | null;
+      matchSource: "lotName" | "altName";
+      matchType: "exact" | "prefix" | "contains";
+      score: number | string;
+    };
+    return {
+      lotId: Number(row.lotId),
+      lotCode: row.lotCode,
+      lotName: row.lotName,
+      altName: row.altName,
+      matchSource: row.matchSource,
+      matchType: row.matchType,
+      score: Number(row.score),
+    };
+  }
+
+  public static async getParkingLotSummaries(
+    context?: ParkingForecastContext,
+  ): Promise<ParkingLotSummaryRow[]> {
+    const mapSummaryRows = (rows: any[]): ParkingLotSummaryRow[] =>
+      rows.map((row) => {
+        const access = {
+          allowsResidents: Boolean(row.allowsResidents),
+          allowsCommuters: Boolean(row.allowsCommuters),
+          allowsFaculty: Boolean(row.allowsFaculty),
+          allowsVisitors: Boolean(row.allowsVisitors),
         };
         return {
-            lotId: Number(row.lotId),
-            lotCode: row.lotCode,
-            lotName: row.lotName,
-            altName: row.altName,
-            matchSource: row.matchSource,
-            matchType: row.matchType,
-            score: Number(row.score),
+          lotCode: row.lotCode,
+          lotName: row.lotName,
+          zoneType: inferZoneType(access),
+          occupancyPercent:
+            row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
+          latestSnapshotTime:
+            row.latestSnapshotTime != null
+              ? (row.latestSnapshotTime as Date)
+              : null,
+          sampleCount: Number(row.sampleCount),
+          allowedZones: allowedZonesForLot(access),
         };
-    }
+      });
 
-    public static async getParkingLotSummaries(
-        context?: ParkingForecastContext
-    ): Promise<ParkingLotSummaryRow[]> {
-        const mapSummaryRows = (rows: any[]): ParkingLotSummaryRow[] =>
-            rows.map((row) => {
-                const access = {
-                    allowsResidents: Boolean(row.allowsResidents),
-                    allowsCommuters: Boolean(row.allowsCommuters),
-                    allowsFaculty: Boolean(row.allowsFaculty),
-                    allowsVisitors: Boolean(row.allowsVisitors),
-                };
-                return {
-                    lotCode: row.lotCode,
-                    lotName: row.lotName,
-                    zoneType: inferZoneType(access),
-                    occupancyPercent:
-                        row.occupancyPercent != null ? Number(row.occupancyPercent) : null,
-                    latestSnapshotTime:
-                        row.latestSnapshotTime != null
-                            ? (row.latestSnapshotTime as Date)
-                            : null,
-                    sampleCount: Number(row.sampleCount),
-                    allowedZones: allowedZonesForLot(access),
-                };
-            });
-
-        const runSummaryQuery = async (
-            targetHour: number | null,
-            targetDayOfWeek: number | null
-        ): Promise<ParkingLotSummaryRow[]> => {
-            const result = await pool.query(
-                `
+    const runSummaryQuery = async (
+      targetHour: number | null,
+      targetDayOfWeek: number | null,
+    ): Promise<ParkingLotSummaryRow[]> => {
+      const result = await pool.query(
+        `
       WITH lot_capacity AS (
         SELECT lotid, COUNT(*)::int AS capacity
         FROM spaces
@@ -289,29 +289,29 @@ export class ParkingAnalyticsService {
         l.allowsvisitors
       ORDER BY l.lotid ASC;
       `,
-                [targetHour, targetDayOfWeek]
-            );
-            return mapSummaryRows(result.rows);
-        };
+        [targetHour, targetDayOfWeek],
+      );
+      return mapSummaryRows(result.rows);
+    };
 
-        const targetHour = context?.targetHour ?? null;
-        const targetDayOfWeek = context?.targetDayOfWeek ?? null;
-        const contextRows = await runSummaryQuery(targetHour, targetDayOfWeek);
+    const targetHour = context?.targetHour ?? null;
+    const targetDayOfWeek = context?.targetDayOfWeek ?? null;
+    const contextRows = await runSummaryQuery(targetHour, targetDayOfWeek);
 
-        // If a forecast bucket has no samples at all, fall back to overall historical patterns.
-        const hasAnySamples = contextRows.some((row) => row.sampleCount > 0);
-        if (!hasAnySamples && (targetHour !== null || targetDayOfWeek !== null)) {
-            return runSummaryQuery(null, null);
-        }
-
-        return contextRows;
+    // If a forecast bucket has no samples at all, fall back to overall historical patterns.
+    const hasAnySamples = contextRows.some((row) => row.sampleCount > 0);
+    if (!hasAnySamples && (targetHour !== null || targetDayOfWeek !== null)) {
+      return runSummaryQuery(null, null);
     }
 
-    public static async getBusyLotsBeforeNineAm(
-        occupancyThreshold: number = 90
-    ): Promise<BusyLotBeforeNineRow[]> {
-        const result = await pool.query(
-            `
+    return contextRows;
+  }
+
+  public static async getBusyLotsBeforeNineAm(
+    occupancyThreshold: number = 90,
+  ): Promise<BusyLotBeforeNineRow[]> {
+    const result = await pool.query(
+      `
       WITH lot_capacity AS (
         SELECT lotid, COUNT(*)::int AS capacity
         FROM spaces
@@ -370,21 +370,21 @@ export class ParkingAnalyticsService {
       ) >= $1
       ORDER BY "averageOccupancyPercent" DESC;
       `,
-            [occupancyThreshold]
-        );
+      [occupancyThreshold],
+    );
 
-        return result.rows.map((row) => ({
-            lotCode: row.lotCode,
-            lotName: row.lotName,
-            zoneType: row.zoneType,
-            averageOccupancyPercent: Number(row.averageOccupancyPercent),
-            sampleCount: Number(row.sampleCount),
-        }));
-    }
+    return result.rows.map((row) => ({
+      lotCode: row.lotCode,
+      lotName: row.lotName,
+      zoneType: row.zoneType,
+      averageOccupancyPercent: Number(row.averageOccupancyPercent),
+      sampleCount: Number(row.sampleCount),
+    }));
+  }
 
-    public static async getAllLots(): Promise<ParkingLotRow[]> {
-        const result = await pool.query(
-            `
+  public static async getAllLots(): Promise<ParkingLotRow[]> {
+    const result = await pool.query(
+      `
       SELECT
         lotid AS id,
         COALESCE(NULLIF(BTRIM(altname), ''), lotid::text) AS "lotCode",
@@ -398,22 +398,22 @@ export class ParkingAnalyticsService {
         END AS "zoneType"
       FROM lots
       ORDER BY lotid ASC;
+      `,
+    );
+
+    return result.rows.map((row) => ({
+      id: Number(row.id),
+      lotCode: row.lotCode,
+      lotName: row.lotName,
+      zoneType: row.zoneType,
+    }));
+  }
+
+  public static async getLatestSnapshotsPerLot(): Promise<
+    LatestSnapshotPerLotRow[]
+  > {
+    const result = await pool.query(
       `
-        );
-
-        return result.rows.map((row) => ({
-            id: Number(row.id),
-            lotCode: row.lotCode,
-            lotName: row.lotName,
-            zoneType: row.zoneType,
-        }));
-    }
-
-    public static async getLatestSnapshotsPerLot(): Promise<
-        LatestSnapshotPerLotRow[]
-    > {
-        const result = await pool.query(
-            `
       WITH lot_capacity AS (
         SELECT lotid, COUNT(*)::int AS capacity
         FROM spaces
@@ -459,22 +459,22 @@ export class ParkingAnalyticsService {
       FROM ranked r
       WHERE r.rk = 1
       ORDER BY r.lotid ASC;
+      `,
+    );
+
+    return result.rows.map((row) => ({
+      id: Number(row.id),
+      lotId: Number(row.lotId),
+      occupancyPercent: Number(row.occupancyPercent),
+      snapshotAt: row.snapshotAt as Date,
+    }));
+  }
+
+  public static async getLotByCode(
+    lotCode: string,
+  ): Promise<LotDetailRow | null> {
+    const result = await pool.query(
       `
-        );
-
-        return result.rows.map((row) => ({
-            id: Number(row.id),
-            lotId: Number(row.lotId),
-            occupancyPercent: Number(row.occupancyPercent),
-            snapshotAt: row.snapshotAt as Date,
-        }));
-    }
-
-    public static async getLotByCode(
-        lotCode: string
-    ): Promise<LotDetailRow | null> {
-        const result = await pool.query(
-            `
       WITH lot_capacity AS (
         SELECT lotid, COUNT(*)::int AS capacity
         FROM spaces
@@ -531,153 +531,154 @@ export class ParkingAnalyticsService {
         OR l.lotname = $1
         OR COALESCE(l.altname, '') = $1;
       `,
-            [lotCode]
-        );
+      [lotCode],
+    );
 
-        if (result.rows.length === 0) {
-            return null;
-        }
-
-        const row = result.rows[0] as {
-            id: unknown;
-            lotCode: string;
-            lotName: string;
-            zoneType: string;
-            snapshotId: number | null;
-            snapshotOccupancyPercent: string | number | null;
-            snapshotAt: Date | null;
-        };
-
-        const latestSnapshot =
-            row.snapshotId != null &&
-            row.snapshotOccupancyPercent != null &&
-            row.snapshotAt != null
-                ? {
-                      id: Number(row.snapshotId),
-                      occupancyPercent: Number(row.snapshotOccupancyPercent),
-                      snapshotAt: row.snapshotAt as Date,
-                  }
-                : null;
-
-        return {
-            id: Number(row.id),
-            lotCode: row.lotCode,
-            lotName: row.lotName,
-            zoneType: row.zoneType,
-            latestSnapshot,
-        };
+    if (result.rows.length === 0) {
+      return null;
     }
 
-    public static async getRecommendation(
-        allowedZones?: string[],
-        context?: ParkingForecastContext
-    ): Promise<ParkingRecommendationRow | null> {
-        const summaries = await this.getParkingLotSummaries(context);
-        const zoneSet =
-            allowedZones && allowedZones.length > 0
-                ? new Set(allowedZones.map((zone) => zone.toLowerCase()))
-                : null;
+    const row = result.rows[0] as {
+      id: unknown;
+      lotCode: string;
+      lotName: string;
+      zoneType: string;
+      snapshotId: number | null;
+      snapshotOccupancyPercent: string | number | null;
+      snapshotAt: Date | null;
+    };
 
-        const candidates = summaries.filter((row) => {
-            if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
-                return false;
-            }
-            if (row.sampleCount <= 0) {
-                return false;
-            }
-            if (!zoneSet) {
-                return true;
-            }
-            if (row.allowedZones.length === 0) {
-                return false;
-            }
-            return row.allowedZones.some((zone) => zoneSet.has(zone.toLowerCase()));
-        });
+    const latestSnapshot =
+      row.snapshotId != null &&
+      row.snapshotOccupancyPercent != null &&
+      row.snapshotAt != null
+        ? {
+            id: Number(row.snapshotId),
+            occupancyPercent: Number(row.snapshotOccupancyPercent),
+            snapshotAt: row.snapshotAt as Date,
+          }
+        : null;
 
-        if (candidates.length === 0) {
-            return null;
-        }
+    return {
+      id: Number(row.id),
+      lotCode: row.lotCode,
+      lotName: row.lotName,
+      zoneType: row.zoneType,
+      latestSnapshot,
+    };
+  }
 
-        candidates.sort((a, b) => {
-            const aHasDistance = a.walkingMinutes != null;
-            const bHasDistance = b.walkingMinutes != null;
+  public static async getRecommendation(
+    allowedZones?: string[],
+    context?: ParkingForecastContext,
+  ): Promise<ParkingRecommendationRow | null> {
+    const summaries = await this.getParkingLotSummaries(context);
+    const zoneSet =
+      allowedZones && allowedZones.length > 0
+        ? new Set(allowedZones.map((zone) => zone.toLowerCase()))
+        : null;
 
-            // Preserve teammate logic when both candidates include distance context.
-            if (aHasDistance && bHasDistance) {
-                const scoreA = computeRecommendationScore(a);
-                const scoreB = computeRecommendationScore(b);
-                if (scoreA !== scoreB) {
-                    return scoreA - scoreB;
-                }
-            }
+    const candidates = summaries.filter((row) => {
+      if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
+        return false;
+      }
+      if (row.sampleCount <= 0) {
+        return false;
+      }
+      if (!zoneSet) {
+        return true;
+      }
+      if (row.allowedZones.length === 0) {
+        return false;
+      }
+      return row.allowedZones.some((zone) => zoneSet.has(zone.toLowerCase()));
+    });
 
-            const byOccupancy = (a.occupancyPercent as number) - (b.occupancyPercent as number);
-            if (byOccupancy !== 0) {
-                return byOccupancy;
-            }
-            const bySampleCount = b.sampleCount - a.sampleCount;
-            if (bySampleCount !== 0) {
-                return bySampleCount;
-            }
-            return (
-                (b.latestSnapshotTime as Date).getTime() -
-                (a.latestSnapshotTime as Date).getTime()
-            );
-        });
-
-        const selected = candidates[0];
-        const zoneSummary =
-            zoneSet && zoneSet.size > 0
-                ? `Eligible by zone filter from your question: ${[...zoneSet].sort().join(", ")}. `
-                : "No zone filter applied (all zone types considered). ";
-        const contextSummary =
-            context?.targetHour !== null && context?.targetHour !== undefined
-                ? `Forecast uses historical snapshots from hour ${context.targetHour}:00`
-                : "Forecast uses overall historical parking patterns";
-        const daySummary =
-            context?.targetDayOfWeek !== null && context?.targetDayOfWeek !== undefined
-                ? ` on weekday index ${context.targetDayOfWeek}`
-                : "";
-        const distanceSummary =
-            selected.walkingMinutes != null
-                ? ` Distance-aware scoring was applied with ~${selected.walkingMinutes} walking minutes context.`
-                : "";
-        const reason = `${zoneSummary}${contextSummary}${daySummary}. Selected for lowest expected occupancy among matching lots (${selected.sampleCount} historical samples); ties favor stronger sample coverage, then newer supporting snapshots.${distanceSummary}`;
-        return {
-            lotCode: selected.lotCode,
-            lotName: selected.lotName,
-            zoneType: selected.zoneType,
-            occupancyPercent: Number(selected.occupancyPercent),
-            latestSnapshotTime: selected.latestSnapshotTime as Date,
-            sampleCount: selected.sampleCount,
-            reason,
-        };
+    if (candidates.length === 0) {
+      return null;
     }
 
+    candidates.sort((a, b) => {
+      const aHasDistance = a.walkingMinutes != null;
+      const bHasDistance = b.walkingMinutes != null;
+
+      // Preserve teammate logic when both candidates include distance context.
+      if (aHasDistance && bHasDistance) {
+        const scoreA = computeRecommendationScore(a);
+        const scoreB = computeRecommendationScore(b);
+        if (scoreA !== scoreB) {
+          return scoreA - scoreB;
+        }
+      }
+
+      const byOccupancy =
+        (a.occupancyPercent as number) - (b.occupancyPercent as number);
+      if (byOccupancy !== 0) {
+        return byOccupancy;
+      }
+      const bySampleCount = b.sampleCount - a.sampleCount;
+      if (bySampleCount !== 0) {
+        return bySampleCount;
+      }
+      return (
+        (b.latestSnapshotTime as Date).getTime() -
+        (a.latestSnapshotTime as Date).getTime()
+      );
+    });
+
+    const selected = candidates[0];
+    const zoneSummary =
+      zoneSet && zoneSet.size > 0
+        ? `Eligible by zone filter from your question: ${[...zoneSet].sort().join(", ")}. `
+        : "No zone filter applied (all zone types considered). ";
+    const contextSummary =
+      context?.targetHour !== null && context?.targetHour !== undefined
+        ? `Forecast uses historical snapshots from hour ${context.targetHour}:00`
+        : "Forecast uses overall historical parking patterns";
+    const daySummary =
+      context?.targetDayOfWeek !== null &&
+      context?.targetDayOfWeek !== undefined
+        ? ` on weekday index ${context.targetDayOfWeek}`
+        : "";
+    const distanceSummary =
+      selected.walkingMinutes != null
+        ? ` Distance-aware scoring was applied with ~${selected.walkingMinutes} walking minutes context.`
+        : "";
+    const reason = `${zoneSummary}${contextSummary}${daySummary}. Selected for lowest expected occupancy among matching lots (${selected.sampleCount} historical samples); ties favor stronger sample coverage, then newer supporting snapshots.${distanceSummary}`;
+    return {
+      lotCode: selected.lotCode,
+      lotName: selected.lotName,
+      zoneType: selected.zoneType,
+      occupancyPercent: Number(selected.occupancyPercent),
+      latestSnapshotTime: selected.latestSnapshotTime as Date,
+      sampleCount: selected.sampleCount,
+      reason,
+    };
+  }
 }
 
 function computeRecommendationScore(row: {
-    occupancyPercent: number | null;
-    latestSnapshotTime: Date | null;
-    walkingMinutes?: number | null; // optional for future distance support
+  occupancyPercent: number | null;
+  latestSnapshotTime: Date | null;
+  walkingMinutes?: number | null; // optional for future distance support
 }): number {
-    // If missing required data, treat as very bad candidate
-    if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
-        return Number.POSITIVE_INFINITY;
-    }
+  // If missing required data, treat as very bad candidate
+  if (row.occupancyPercent === null || row.latestSnapshotTime === null) {
+    return Number.POSITIVE_INFINITY;
+  }
 
-    const distanceWeight = 0.6;
-    const availabilityWeight = 0.4;
+  const distanceWeight = 0.6;
+  const availabilityWeight = 0.4;
 
-    // For now: fallback distance (you can replace this later with real data)
-    const walkingMinutes = row.walkingMinutes ?? 5;
+  // For now: fallback distance (you can replace this later with real data)
+  const walkingMinutes = row.walkingMinutes ?? 5;
 
-    // Convert occupancy → penalty (0 = empty, 1 = full)
-    const availabilityPenalty = row.occupancyPercent / 100;
+  // Convert occupancy → penalty (0 = empty, 1 = full)
+  const availabilityPenalty = row.occupancyPercent / 100;
 
-    const score =
-        walkingMinutes * distanceWeight +
-        availabilityPenalty * availabilityWeight * 10;
+  const score =
+    walkingMinutes * distanceWeight +
+    availabilityPenalty * availabilityWeight * 10;
 
-    return score;
+  return score;
 }

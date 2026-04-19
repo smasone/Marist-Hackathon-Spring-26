@@ -94,18 +94,56 @@ export interface ParkingAskResponse {
  * @returns Parsed JSON array from the backend.
  * @throws On non-OK HTTP status or invalid JSON.
  */
+// export async function fetchParkingSummary(params?: {
+//   hour?: number;
+//   dayOfWeek?: number;
+//   accessibleOnly?: boolean;
+// }): Promise<ParkingLotSummary[]> {
+//   const base = getApiBaseUrl();
+//   const search = new URLSearchParams();
+//   if (params?.hour !== undefined) {
+//     search.set("hour", String(params.hour));
+//   }
+//   if (params?.dayOfWeek !== undefined) {
+//     search.set("dayOfWeek", String(params.dayOfWeek));
+//   }
+//   if (params?.accessibleOnly) {
+//     search.set("accessibleOnly", "true");
+//   }
+//   const suffix = search.toString();
+//   const url = `${base}/api/parking/summary${suffix ? `?${suffix}` : ""}`;
+//   const res = await fetch(url);
+
+//   if (!res.ok) {
+//     throw new Error(`Request failed (${res.status} ${res.statusText})`);
+//   }
+
+//   const data: unknown = await res.json();
+//   if (!Array.isArray(data)) {
+//     throw new Error("Expected a JSON array from /api/parking/summary");
+//   }
+
+//   return data as ParkingLotSummary[];
+// }
+
 export async function fetchParkingSummary(params?: {
   hour?: number;
   dayOfWeek?: number;
+  accessibleOnly?: boolean;
 }): Promise<ParkingLotSummary[]> {
   const base = getApiBaseUrl();
   const search = new URLSearchParams();
+
   if (params?.hour !== undefined) {
     search.set("hour", String(params.hour));
   }
   if (params?.dayOfWeek !== undefined) {
     search.set("dayOfWeek", String(params.dayOfWeek));
   }
+  if (params?.accessibleOnly !== undefined) {
+    search.set("accessibleOnly", String(params.accessibleOnly));
+  }
+
   const suffix = search.toString();
   const url = `${base}/api/parking/summary${suffix ? `?${suffix}` : ""}`;
   const res = await fetch(url);
@@ -142,7 +180,9 @@ export async function fetchParkingLots(): Promise<ParkingLotListItem[]> {
 /**
  * Sends one user question to the backend AI router.
  */
-export async function askParking(question: string): Promise<ParkingAskResponse> {
+export async function askParking(
+  question: string,
+): Promise<ParkingAskResponse> {
   const base = getApiBaseUrl();
   const url = `${base}/api/parking/ask`;
   const res = await fetch(url, {
@@ -161,7 +201,9 @@ export async function askParking(question: string): Promise<ParkingAskResponse> 
   try {
     data = await res.json();
   } catch {
-    throw new Error("Invalid JSON from /api/parking/ask (is the API URL correct?)");
+    throw new Error(
+      "Invalid JSON from /api/parking/ask (is the API URL correct?)",
+    );
   }
   if (typeof data !== "object" || data === null || !("intent" in data)) {
     throw new Error("Expected a JSON object with intent from /api/parking/ask");

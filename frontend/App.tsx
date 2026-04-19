@@ -31,7 +31,7 @@ function percent(v: number) {
 }
 
 function toSearchableText(lot: ForecastParkingLot): string {
-  const record = lot as Record<string, unknown>;
+  const record = lot as unknown as Record<string, unknown>;
   return [
     lot.lotCode,
     lot.lotName,
@@ -78,7 +78,12 @@ function getAllowedZoneTypesForAudience(user: UserType): Set<string> | null {
     return null;
   }
 
-  const allAudienceZoneTypes = ["all", "all_audiences", "allaudiences", "mixed"];
+  const allAudienceZoneTypes = [
+    "all",
+    "all_audiences",
+    "allaudiences",
+    "mixed",
+  ];
 
   if (user === "resident") {
     return new Set(["resident", "student", ...allAudienceZoneTypes]);
@@ -145,6 +150,7 @@ export default function App() {
           fetchParkingSummary({
             hour: forecastContext.hour,
             dayOfWeek: forecastContext.dayOfWeek,
+            accessibleOnly: showAccessibleOnly,
           }),
           fetchParkingLots(),
         ]);
@@ -180,35 +186,69 @@ export default function App() {
     };
   }, [forecastContext.dayOfWeek, forecastContext.hour]);
 
-  const allowedZoneTypes = useMemo(() => getAllowedZoneTypesForAudience(user), [user]);
+  const allowedZoneTypes = useMemo(
+    () => getAllowedZoneTypesForAudience(user),
+    [user],
+  );
+
+  // const availableLots = useMemo(() => {
+  //   const lots = apiLots ?? [];
+
+  //   if (showAccessibleOnly) {
+  //     return [...lots]
+  //       .filter((lot) => isAccessibleLot(lot))
+  //       .sort((a, b) => {
+  //         const distanceA = getDistanceRank(a);
+  //         const distanceB = getDistanceRank(b);
+
+  //         if (distanceA !== null && distanceB !== null) {
+  //           return distanceA - distanceB;
+  //         }
+  //         if (distanceA !== null) return -1;
+  //         if (distanceB !== null) return 1;
+
+  //         const occupancyA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
+  //         const occupancyB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
+  //         return occupancyA - occupancyB;
+  //       });
+  //   }
+
+  //   if (!allowedZoneTypes) {
+  //     return lots;
+  //   }
+
+  //   return lots.filter((lot) =>
+  //     allowedZoneTypes.has(lot.zoneType.toLowerCase()),
+  //   );
+  // }, [allowedZoneTypes, apiLots, showAccessibleOnly]);
 
   const availableLots = useMemo(() => {
     const lots = apiLots ?? [];
 
     if (showAccessibleOnly) {
-      return [...lots]
-        .filter((lot) => isAccessibleLot(lot))
-        .sort((a, b) => {
-          const distanceA = getDistanceRank(a);
-          const distanceB = getDistanceRank(b);
+      return [...lots].sort((a, b) => {
+        const distanceA = getDistanceRank(a);
+        const distanceB = getDistanceRank(b);
 
-          if (distanceA !== null && distanceB !== null) {
-            return distanceA - distanceB;
-          }
-          if (distanceA !== null) return -1;
-          if (distanceB !== null) return 1;
+        if (distanceA !== null && distanceB !== null) {
+          return distanceA - distanceB;
+        }
+        if (distanceA !== null) return -1;
+        if (distanceB !== null) return 1;
 
-          const occupancyA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
-          const occupancyB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
-          return occupancyA - occupancyB;
-        });
+        const occupancyA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
+        const occupancyB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
+        return occupancyA - occupancyB;
+      });
     }
 
     if (!allowedZoneTypes) {
       return lots;
     }
 
-    return lots.filter((lot) => allowedZoneTypes.has(lot.zoneType.toLowerCase()));
+    return lots.filter((lot) =>
+      allowedZoneTypes.has(lot.zoneType.toLowerCase()),
+    );
   }, [allowedZoneTypes, apiLots, showAccessibleOnly]);
 
   const stats = useMemo(() => {
@@ -372,7 +412,7 @@ export default function App() {
         </div>
       </div>
 
-      <div
+      {/* <div
         style={{
           background: "white",
           borderRadius: 20,
@@ -519,7 +559,7 @@ export default function App() {
             </table>
           </div>
         )}
-      </div>
+      </div> */}
 
       <div
         style={{
@@ -750,7 +790,7 @@ export default function App() {
                     target="_blank"
                     rel="noreferrer"
                   >
-                    {askResult.sourceUrl}
+                    S{askResult.sourceUrl}
                   </a>
                   {askResult.lastCheckedAt && (
                     <span style={{ display: "block", marginTop: 4 }}>
