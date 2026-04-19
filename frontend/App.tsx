@@ -671,6 +671,45 @@ export default function App() {
                 ? "(Empty answer from API - check backend logs and response shape.)"
                 : askResult.answer}
             </p>
+            {askResult.explanation && (
+              <p
+                style={{
+                  margin: "8px 0 0 0",
+                  color: "#475569",
+                  fontSize: 14,
+                }}
+              >
+                {askResult.explanation}
+              </p>
+            )}
+            {Array.isArray(askResult.supportingDetails) &&
+              askResult.supportingDetails.length > 0 && (
+                <ul
+                  style={{
+                    margin: "8px 0 0 18px",
+                    color: "#64748b",
+                    fontSize: 13,
+                    padding: 0,
+                  }}
+                >
+                  {askResult.supportingDetails.map((detail, idx) => (
+                    <li key={`${detail}-${idx}`} style={{ marginBottom: 4 }}>
+                      {detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            {askResult.disclaimer && (
+              <p
+                style={{
+                  margin: "8px 0 0 0",
+                  color: "#64748b",
+                  fontSize: 12,
+                }}
+              >
+                {askResult.disclaimer}
+              </p>
+            )}
             {askResult.intent === "parking_rules_faq" &&
               askResult.sourceUrl && (
                 <p

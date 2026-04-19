@@ -51,6 +51,17 @@ export interface ParkingAskSourceRef {
 export interface ParkingAskResponse {
   intent: string;
   answer: string;
+  explanation?: string;
+  disclaimer?: string;
+  supportingDetails?: string[];
+  recommendationMeta?: {
+    inferredTimeContext?: string | null;
+    inferredTimeContextIso?: string | null;
+    inferredFromQuestion?: boolean;
+    selectionReason?: string;
+    sampleCount?: number;
+    latestSnapshotTime?: string;
+  };
   data?: unknown;
   /** Present for `parking_rules_faq` intent. */
   sourceType?: string;

@@ -311,6 +311,9 @@ async function parkingAnswerWithOptionalAiPhrasing(
 const DEMO_TIMELINESS_PREFIX =
   "Forecast note: this app estimates lot busyness from stored historical snapshots, not live sensor feeds. ";
 
+const FORECAST_DISCLAIMER =
+  "This is a forecast based on stored historical parking data, not live sensor tracking.";
+
 function mergeFactsWithTimelinessNote(
   facts: Record<string, unknown>
 ): Record<string, unknown> {
@@ -345,6 +348,40 @@ function busynessCategory(occupancyPercent: number): "light" | "moderate" | "hea
     return "moderate";
   }
   return "light";
+}
+
+function buildRecommendationAnswer(recommendation: {
+  lotName: string;
+}): string {
+  return `Best forecasted commuter option right now: ${recommendation.lotName}.`;
+}
+
+function buildRecommendationExplanation(
+  inferredInstant: ReturnType<typeof inferReferenceInstantFromQuestion> | null
+): string {
+  if (inferredInstant?.inferredFromQuestion) {
+    return `For the time you asked about, it is expected to be one of the least busy matching lots.`;
+  }
+  return `It is expected to be one of the least busy matching lots around this time.`;
+}
+
+function buildRecommendationSupportingDetails(
+  recommendation: {
+    occupancyPercent: number;
+    zoneType: string;
+    lotCode: string;
+  },
+  inferredInstant: ReturnType<typeof inferReferenceInstantFromQuestion> | null
+): string[] {
+  const details = [
+    `Expected occupancy: ${recommendation.occupancyPercent}% (${busynessCategory(recommendation.occupancyPercent)}).`,
+    `Zone type: ${recommendation.zoneType}.`,
+    `Lot code: ${recommendation.lotCode}.`,
+  ];
+  if (inferredInstant?.inferredFromQuestion) {
+    details.push(`Time context inferred from your question: ${inferredInstant.label}.`);
+  }
+  return details;
 }
 
 function appendAthleticsSuffix(base: string, athletics: AthleticsAskSupplement): string {
@@ -778,13 +815,12 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         });
         return;
       }
-      const forecastContext =
-        inferredInstant !== null
-          ? `around ${inferredInstant.at.toLocaleString()}`
-          : "for a general arrival context";
-      const fallbackAnswer = `${DEMO_TIMELINESS_PREFIX}Predicted best option ${forecastContext}: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone, with expected occupancy near ${recommendation.occupancyPercent}% (${busynessCategory(
-        recommendation.occupancyPercent
-      )} busyness). ${recommendation.reason}`;
+      const fallbackAnswer = buildRecommendationAnswer(recommendation);
+      const explanation = buildRecommendationExplanation(inferredInstant);
+      const supportingDetails = buildRecommendationSupportingDetails(
+        recommendation,
+        inferredInstant
+      );
       const facts = {
         zonesRequested: zones,
         forecastContext: inferredInstant?.at.toISOString() ?? null,
@@ -822,6 +858,17 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       res.json({
         intent: "recommendation",
         answer: finalAnswer,
+        explanation,
+        disclaimer: FORECAST_DISCLAIMER,
+        supportingDetails,
+        recommendationMeta: {
+          inferredTimeContext: inferredInstant?.label ?? null,
+          inferredTimeContextIso: inferredInstant?.at.toISOString() ?? null,
+          inferredFromQuestion: inferredInstant?.inferredFromQuestion ?? false,
+          selectionReason: recommendation.reason,
+          sampleCount: recommendation.sampleCount,
+          latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+        },
         data: recommendation,
         ...athleticsSupplementToResponseFields(athletics),
       });
@@ -967,9 +1014,12 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         });
         return;
       }
-      const fallbackAnswerTime = `${DEMO_TIMELINESS_PREFIX}Predicted best option from stored parking history: ${recommendation.lotName} (${recommendation.lotCode}) in ${recommendation.zoneType} zone, expected near ${recommendation.occupancyPercent}% occupancy (${busynessCategory(
-        recommendation.occupancyPercent
-      )} busyness). ${recommendation.reason}`;
+      const fallbackAnswerTime = buildRecommendationAnswer(recommendation);
+      const explanationTime = buildRecommendationExplanation(inferredInstant);
+      const supportingDetailsTime = buildRecommendationSupportingDetails(
+        recommendation,
+        inferredInstant
+      );
       const factsTime = {
         zonesRequested: zones,
         forecastContext: inferredInstant?.at.toISOString() ?? null,
@@ -1007,6 +1057,17 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       res.json({
         intent: "recommendation",
         answer: finalAnswerTime,
+        explanation: explanationTime,
+        disclaimer: FORECAST_DISCLAIMER,
+        supportingDetails: supportingDetailsTime,
+        recommendationMeta: {
+          inferredTimeContext: inferredInstant?.label ?? null,
+          inferredTimeContextIso: inferredInstant?.at.toISOString() ?? null,
+          inferredFromQuestion: inferredInstant?.inferredFromQuestion ?? false,
+          selectionReason: recommendation.reason,
+          sampleCount: recommendation.sampleCount,
+          latestSnapshotTime: recommendation.latestSnapshotTime.toISOString(),
+        },
         data: recommendation,
         ...athleticsSupplementToResponseFields(athleticsTime),
       });
