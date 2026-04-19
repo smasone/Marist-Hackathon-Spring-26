@@ -417,6 +417,22 @@ function parseForecastQueryContext(req: Request): {
   };
 }
 
+function parsePretendNowQuery(req: Request): Date | null {
+  const raw = req.query.pretendNow;
+  if (raw === undefined) {
+    return null;
+  }
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    return null;
+  }
+  return parsed;
+}
+
 function busynessCategory(occupancyPercent: number): "light" | "moderate" | "heavy" {
   if (occupancyPercent >= 85) {
     return "heavy";
@@ -889,8 +905,22 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *       500:
  *         description: Server error
  */
-app.post("/api/parking/ask", async (req: Request, res: Response) => {
+const askParkingHandler = async (req: Request, res: Response) => {
   try {
+    const isSimulatedNowRoute = req.path === "/api/parking/ask-simulated-now";
+    let referenceNow = new Date();
+    if (isSimulatedNowRoute) {
+      const parsedNow = parsePretendNowQuery(req);
+      if (parsedNow === null) {
+        res.status(400).json({
+          error:
+            "pretendNow query parameter is required on this route and must be a valid ISO timestamp",
+        });
+        return;
+      }
+      referenceNow = parsedNow;
+    }
+
     const body = req.body as AskParkingRequestBody;
     if (body.question === undefined || body.question === null) {
       res.status(400).json({ error: "Question is required" });
@@ -926,7 +956,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         lotName: lotNameMatch.lotName,
         matchType: lotNameMatch.matchType,
       });
-      const inferredInstant = inferReferenceInstantFromQuestion(question);
+      const inferredInstant = inferReferenceInstantFromQuestion(question, referenceNow);
       const lotForecast = await ParkingAnalyticsService.getLotForecastByLotId(
         lotNameMatch.lotId,
         {
@@ -1040,7 +1070,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
 
     if (routingIntent === "recommendation") {
       console.log("[ask] routed intent=recommendation", { zones });
-      const inferredInstant = inferReferenceInstantFromQuestion(question);
+      const inferredInstant = inferReferenceInstantFromQuestion(question, referenceNow);
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
         targetHour: inferredInstant?.at.getHours() ?? null,
         targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
@@ -1098,7 +1128,8 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       try {
         athletics = await computeAthleticsAskSupplementForQuestion(
           question,
-          normalizedQuestion
+          normalizedQuestion,
+          referenceNow
         );
       } catch (error) {
         console.error("[ask] athletics supplement failed (non-fatal)", {
@@ -1172,7 +1203,8 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       try {
         athleticsBusy = await computeAthleticsAskSupplementForQuestion(
           question,
-          normalizedQuestion
+          normalizedQuestion,
+          referenceNow
         );
       } catch (error) {
         console.error("[ask] athletics supplement failed (non-fatal)", {
@@ -1225,7 +1257,8 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       try {
         athleticsLots = await computeAthleticsAskSupplementForQuestion(
           question,
-          normalizedQuestion
+          normalizedQuestion,
+          referenceNow
         );
       } catch (error) {
         console.error("[ask] athletics supplement failed (non-fatal)", {
@@ -1256,7 +1289,7 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     ) {
       console.log("[ask] routed intent=recommendation (time-based parking context)");
       const zones = parseZonesFromQuestion(normalizedQuestion);
-      const inferredInstant = inferReferenceInstantFromQuestion(question);
+      const inferredInstant = inferReferenceInstantFromQuestion(question, referenceNow);
       const recommendation = await ParkingAnalyticsService.getRecommendation(zones, {
         targetHour: inferredInstant?.at.getHours() ?? null,
         targetDayOfWeek: inferredInstant?.at.getDay() ?? null,
@@ -1267,7 +1300,8 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
         try {
           athleticsOnly = await computeAthleticsAskSupplementForQuestion(
             question,
-            normalizedQuestion
+            normalizedQuestion,
+            referenceNow
           );
         } catch (error) {
           console.error("[ask] athletics supplement failed (non-fatal)", {
@@ -1331,7 +1365,8 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
       try {
         athleticsTime = await computeAthleticsAskSupplementForQuestion(
           question,
-          normalizedQuestion
+          normalizedQuestion,
+          referenceNow
         );
       } catch (error) {
         console.error("[ask] athletics supplement failed (non-fatal)", {
@@ -1390,6 +1425,48 @@ app.post("/api/parking/ask", async (req: Request, res: Response) => {
     console.error("POST /api/parking/ask failed:", error);
     res.status(500).json({ error: "Failed to answer parking question" });
   }
-});
+};
+
+app.post("/api/parking/ask", askParkingHandler);
+
+/**
+ * @openapi
+ * /api/parking/ask-simulated-now:
+ *   post:
+ *     tags: [Parking]
+ *     summary: Swagger-only ask route that simulates "now" for time parsing and athletics advisories
+ *     description: >
+ *       Behaves like `/api/parking/ask`, but requires `pretendNow` so relative time phrases
+ *       (for example "today", "tomorrow", "tonight", weekday names) are interpreted as if that
+ *       timestamp were the current moment. Useful for historical scenario testing in Swagger.
+ *     parameters:
+ *       - in: query
+ *         name: pretendNow
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *           example: 2026-04-18T10:00:00-04:00
+ *         description: ISO timestamp used as the reference "now" for question time inference.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [question]
+ *             properties:
+ *               question:
+ *                 type: string
+ *                 example: Will parking be worse tonight because of a game?
+ *     responses:
+ *       200:
+ *         description: Same response shape as /api/parking/ask
+ *       400:
+ *         description: Missing/invalid pretendNow, missing/blank question, non-string question, or invalid JSON body
+ *       500:
+ *         description: Server error
+ */
+app.post("/api/parking/ask-simulated-now", askParkingHandler);
 
 export { app };
