@@ -873,16 +873,16 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *                   type: string
  *                 intent:
  *                   type: string
- *                   description: recommendation | busy_before_nine | lots_list | parking_rules_faq | unsupported
+ *                   description: lot_specific | recommendation | busy_before_nine | lots_list | parking_rules_faq | unsupported
  *                 data:
  *                   nullable: true
  *                   description: >
- *                     Analytics intents return arrays or a recommendation object from Postgres; `parking_rules_faq`
- *                     returns `{ matchedFaqExcerpts, faqUnavailable? }`; `unsupported` and recommendation-without-data
- *                     use `null`.
+ *                     `lot_specific`/`recommendation` return a forecast object when available;
+ *                     `busy_before_nine`/`lots_list` return arrays; `parking_rules_faq` returns
+ *                     `{ matchedFaqExcerpts, faqUnavailable? }`; unsupported and no-data forecast paths use `null`.
  *                 sourceType:
  *                   type: string
- *                   description: Present for parking_rules_faq (official_web)
+ *                   description: Present for parking_rules_faq (official_web) and athletics advisory lookups (official_athletics_schedule)
  *                 sourceTitle:
  *                   type: string
  *                 sourceUrl:
@@ -922,6 +922,18 @@ app.get("/api/parking/lots/:lotCode", async (req: Request, res: Response) => {
  *                     properties:
  *                       title: { type: string }
  *                       url: { type: string }
+ *                 lotSpecificMeta:
+ *                   type: object
+ *                   description: Present for `lot_specific`; includes requested lot match and forecast context.
+ *                 alternativeRecommendation:
+ *                   nullable: true
+ *                   description: Present for `lot_specific` when another lot has a materially better forecast.
+ *                 comparisonDeltaPercent:
+ *                   nullable: true
+ *                   description: Occupancy difference between requested lot and alternate recommendation (when applicable).
+ *                 recommendationMeta:
+ *                   type: object
+ *                   description: Present for recommendation-style responses; includes inferred time context and selection rationale.
  *       400:
  *         description: Missing/blank question, non-string question, or invalid JSON body
  *       500:

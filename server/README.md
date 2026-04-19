@@ -78,7 +78,8 @@ npm run start       # Run once with tsx
 | [http://localhost:3001/api/parking/lots](http://localhost:3001/api/parking/lots) | All rows from `lots` (with API-facing lot code/name/zone mapping). |
 | [http://localhost:3001/api/parking/snapshots/latest](http://localhost:3001/api/parking/snapshots/latest) | Latest history-derived snapshot row per lot. |
 | [http://localhost:3001/api/parking/lots/DEMO-N-01](http://localhost:3001/api/parking/lots/DEMO-N-01) | One lot by API lot code (`altname` when present, otherwise `lotid`), with latest derived snapshot or `null`. |
-| `POST /api/parking/ask` | Ask routing: **forecast-style** questions (recommendation, busy-before-9, lot list) from historical Postgres snapshots; **permit/rules** questions from cached plain text of the [official Marist Parking FAQ](https://www.marist.edu/security/parking/faq) (see `src/services/officialParkingRulesService.ts`); **time-shaped** parking questions may also attach **advisory** metadata from the [official Marist athletics composite schedule](https://goredfoxes.com/calendar) via `src/services/maristAthleticsScheduleService.ts` (does not replace SQL recommendations). |
+| `POST /api/parking/ask` | Ask routing: **forecast-style** questions from historical Postgres snapshots (including `lot_specific` when a lot is named, plus recommendation, busy-before-9, lot list); **permit/rules** questions from cached plain text of the [official Marist Parking FAQ](https://www.marist.edu/security/parking/faq) (see `src/services/officialParkingRulesService.ts`); **time-shaped** parking questions may also attach **advisory** metadata from the [official Marist athletics composite schedule](https://goredfoxes.com/calendar) via `src/services/maristAthleticsScheduleService.ts` (does not replace SQL recommendations). |
+| `POST /api/parking/ask-simulated-now?pretendNow=...` | Swagger/testing variant of Ask: same behavior as `/api/parking/ask`, but relative time phrases are interpreted against the required ISO `pretendNow` query timestamp for repeatable scenario tests. |
 | [http://localhost:3001/api-docs](http://localhost:3001/api-docs) | **Swagger UI** for all routes. |
 
 Quick checks with **curl** (use your real port if you changed `PORT`):
@@ -96,6 +97,9 @@ curl -s -X POST http://localhost:3001/api/parking/ask \
 curl -s -X POST http://localhost:3001/api/parking/ask \
   -H "Content-Type: application/json" \
   -d '{"question":"How do student parking permits work?"}'
+curl -s -X POST "http://localhost:3001/api/parking/ask-simulated-now?pretendNow=2026-04-18T10:00:00-04:00" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Will parking be worse tonight because of a game?"}'
 ```
 
 **Do not commit `.env`** or real credentials.
