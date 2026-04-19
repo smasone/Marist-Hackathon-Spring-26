@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import "./index.css";
-import logo from "./marist-logo.png"; // place your uploaded logo in src folder
+import logo from "./marist-logo.png";
 import {
   askParking,
   fetchParkingLots,
@@ -12,7 +12,6 @@ import {
 
 type UserType = "resident" | "commuter" | "faculty" | "visitor";
 type TimeView = "now" | "1h" | "2h";
-
 interface ForecastParkingLot {
   lotCode: string;
   lotName: string;
@@ -22,22 +21,66 @@ interface ForecastParkingLot {
 }
 
 function getColor(v: number) {
-  if (v > 0.8) return "#eab308"; // yellow
-  if (v > 0.6) return "#22c55e"; // green
-  return "#2563eb"; // blue
+  if (v > 0.8) return "#eab308";
+  if (v > 0.6) return "#22c55e";
+  return "#2563eb";
 }
 
 function percent(v: number) {
   return `${Math.round(v * 100)}%`;
 }
 
+function toSearchableText(lot: ForecastParkingLot): string {
+  const record = lot as Record<string, unknown>;
+  return [
+    lot.lotCode,
+    lot.lotName,
+    lot.zoneType,
+    typeof record.accessType === "string" ? record.accessType : "",
+    typeof record.permitType === "string" ? record.permitType : "",
+    typeof record.category === "string" ? record.category : "",
+    typeof record.tags === "string" ? record.tags : "",
+    Array.isArray(record.tags) ? record.tags.join(" ") : "",
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function isAccessibleLot(lot: ForecastParkingLot): boolean {
+  const text = toSearchableText(lot);
+  return /(accessible|accessibility|ada|disabled|disability|handicap)/.test(
+    text,
+  );
+}
+
+function getDistanceRank(lot: ForecastParkingLot): number | null {
+  const record = lot as unknown as Record<string, unknown>;
+  const candidates = [
+    record.distanceMeters,
+    record.distanceMiles,
+    record.distance,
+    record.distanceRank,
+    record.rank,
+    record.proximityRank,
+  ];
+
+  for (const value of candidates) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 export default function App() {
   const [user, setUser] = useState<UserType>("commuter");
-  const [time, setTime] = useState<TimeView>("now");
   const [clock, setClock] = useState("");
+  const [time, setTime] = useState<TimeView>("now");
   const [apiLots, setApiLots] = useState<ForecastParkingLot[] | null>(null);
   const [apiLoading, setApiLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [showAccessibleOnly, setShowAccessibleOnly] = useState(false);
   const [askInput, setAskInput] = useState("");
   const [askLoading, setAskLoading] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
@@ -65,7 +108,11 @@ export default function App() {
     } else if (time === "2h") {
       anchor.setHours(anchor.getHours() + 2);
     }
-    return { hour: anchor.getHours(), dayOfWeek: anchor.getDay(), label: anchor.toLocaleString() };
+    return {
+      hour: anchor.getHours(),
+      dayOfWeek: anchor.getDay(),
+      label: anchor.toLocaleString(),
+    };
   }, [time]);
 
   useEffect(() => {
@@ -85,16 +132,20 @@ export default function App() {
         const zoneByCode = new Map<string, string>(
           lotRows.map((row: ParkingLotListItem) => [row.lotCode, row.zoneType]),
         );
-        const merged: ForecastParkingLot[] = summaryRows.map((row: ParkingLotSummary) => ({
-          ...row,
-          zoneType: zoneByCode.get(row.lotCode) ?? row.zoneType,
-        }));
+        const merged: ForecastParkingLot[] = summaryRows.map(
+          (row: ParkingLotSummary) => ({
+            ...row,
+            zoneType: zoneByCode.get(row.lotCode) ?? row.zoneType,
+          }),
+        );
         if (!cancelled) {
           setApiLots(merged);
         }
       } catch (err) {
         if (!cancelled) {
-          setApiError(err instanceof Error ? err.message : "Could not load summary");
+          setApiError(
+            err instanceof Error ? err.message : "Could not load summary",
+          );
           setApiLots(null);
         }
       } finally {
@@ -113,12 +164,34 @@ export default function App() {
   const allowedZones = useMemo(() => {
     if (user === "faculty") return new Set(["faculty"]);
     if (user === "visitor") return new Set(["visitor"]);
-    return new Set(["student"]);
+    if (user === "resident") return new Set(["resident"]);
+    return new Set(["commuter"]);
   }, [user]);
 
   const availableLots = useMemo(() => {
-    return (apiLots ?? []).filter((lot) => allowedZones.has(lot.zoneType.toLowerCase()));
-  }, [allowedZones, apiLots]);
+    const lots = apiLots ?? [];
+
+    if (showAccessibleOnly) {
+      return [...lots]
+        .filter((lot) => isAccessibleLot(lot))
+        .sort((a, b) => {
+          const distanceA = getDistanceRank(a);
+          const distanceB = getDistanceRank(b);
+
+          if (distanceA !== null && distanceB !== null) {
+            return distanceA - distanceB;
+          }
+          if (distanceA !== null) return -1;
+          if (distanceB !== null) return 1;
+
+          const occupancyA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
+          const occupancyB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
+          return occupancyA - occupancyB;
+        });
+    }
+
+    return lots.filter((lot) => allowedZones.has(lot.zoneType.toLowerCase()));
+  }, [allowedZones, apiLots, showAccessibleOnly]);
 
   const stats = useMemo(() => {
     let light = 0;
@@ -139,11 +212,22 @@ export default function App() {
 
   const bestLot = useMemo(() => {
     return [...availableLots].sort((a, b) => {
+      if (showAccessibleOnly) {
+        const distanceA = getDistanceRank(a);
+        const distanceB = getDistanceRank(b);
+
+        if (distanceA !== null && distanceB !== null) {
+          return distanceA - distanceB;
+        }
+        if (distanceA !== null) return -1;
+        if (distanceB !== null) return 1;
+      }
+
       const scoreA = a.occupancyPercent ?? Number.POSITIVE_INFINITY;
       const scoreB = b.occupancyPercent ?? Number.POSITIVE_INFINITY;
       return scoreA - scoreB;
     })[0];
-  }, [availableLots]);
+  }, [availableLots, showAccessibleOnly]);
 
   async function submitAsk(): Promise<void> {
     const question = askInput.trim();
@@ -159,10 +243,14 @@ export default function App() {
       const response = await askParking(contextualQuestion);
       setAskResult(response);
       requestAnimationFrame(() => {
-        document.getElementById("ask-result")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        document
+          .getElementById("ask-result")
+          ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     } catch (err) {
-      setAskError(err instanceof Error ? err.message : "Could not get an answer");
+      setAskError(
+        err instanceof Error ? err.message : "Could not get an answer",
+      );
     } finally {
       setAskLoading(false);
     }
@@ -178,7 +266,6 @@ export default function App() {
         color: "#111827",
       }}
     >
-      {/* HEADER */}
       <div
         style={{
           background: "white",
@@ -192,19 +279,31 @@ export default function App() {
           <img src={logo} alt="Marist" style={{ height: 55 }} />
 
           <div>
-            <h1 style={{ margin: 0, color: "#be123c" }}>
+            <h1
+              style={{
+                margin: 0,
+                color: "#be123c",
+                fontSize: 28,
+                fontWeight: 800,
+                letterSpacing: "-0.5px",
+              }}
+            >
               Campus Parking Finder
             </h1>
-            <p style={{ margin: 0, color: "#6b7280" }}>
-              Forecasted parking patterns • Smart recommendations • {clock}
+
+            <p
+              style={{
+                margin: "4px 0 0 0",
+                color: "#475569",
+                fontSize: 15,
+                fontWeight: 500,
+              }}
+            >
+              Live Statistics • Smart Recommendations • {clock}
             </p>
-          <p style={{ margin: "8px 0 0 0", color: "#94a3b8", fontSize: 12 }}>
-            Forecasts are based on stored parking history, not live sensor feeds.
-          </p>
           </div>
         </div>
 
-        {/* FILTERS */}
         <div
           style={{
             display: "flex",
@@ -213,17 +312,17 @@ export default function App() {
             flexWrap: "wrap",
           }}
         >
-          {["resident", "commuter", "faculty", "visitor"].map((u) => (
+          {["Resident", "Commuter", "Faculty", "Visitor"].map((u) => (
             <button
               key={u}
-              onClick={() => setUser(u as UserType)}
+              onClick={() => setUser(u.toLowerCase() as UserType)}
               style={{
                 padding: "10px 16px",
                 border: "none",
                 borderRadius: 10,
                 cursor: "pointer",
-                background: user === u ? "#be123c" : "#f1f5f9",
-                color: user === u ? "white" : "#111827",
+                background: user === u.toLowerCase() ? "#be123c" : "#f1f5f9",
+                color: user === u.toLowerCase() ? "white" : "#111827",
                 fontWeight: 600,
               }}
             >
@@ -231,27 +330,30 @@ export default function App() {
             </button>
           ))}
 
-          {["now", "1h", "2h"].map((t) => (
-            <button
-              key={t}
-              onClick={() => setTime(t as TimeView)}
-              style={{
-                padding: "10px 16px",
-                border: "none",
-                borderRadius: 10,
-                cursor: "pointer",
-                background: time === t ? "#be123c" : "#f1f5f9",
-                color: time === t ? "white" : "#111827",
-                fontWeight: 600,
-              }}
-            >
-              {t}
-            </button>
-          ))}
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderRadius: 10,
+              background: showAccessibleOnly ? "#fee2e2" : "#f8fafc",
+              border: "1px solid #e2e8f0",
+              fontWeight: 600,
+              color: "#334155",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showAccessibleOnly}
+              onChange={(e) => setShowAccessibleOnly(e.target.checked)}
+            />
+            Show accessibility spaces
+          </label>
         </div>
       </div>
 
-      {/* FORECAST API SUMMARY (real backend) */}
       <div
         style={{
           background: "white",
@@ -261,25 +363,37 @@ export default function App() {
           marginBottom: 24,
         }}
       >
-        <h2 style={{ color: "#be123c", marginTop: 0 }}>Forecasted lot busyness (API)</h2>
+        <h2 style={{ color: "#be123c", marginTop: 0 }}>
+          Live lot summary (API)
+        </h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Data from <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> — same fields as
-          the backend JSON, estimated for {forecastContext.label} using historical snapshots.
+          Data from{" "}
+          <code style={{ fontSize: 13 }}>GET /api/parking/summary</code> and{" "}
+          <code style={{ fontSize: 13 }}>GET /api/parking/lots</code>.
         </p>
 
-        {apiLoading && <p style={{ color: "#64748b" }}>Loading…</p>}
+        {apiLoading && <p style={{ color: "#64748b" }}>Loading...</p>}
         {apiError && (
           <p style={{ color: "#b91c1c", fontWeight: 600 }}>
             {apiError}
-            <span style={{ display: "block", fontWeight: 400, fontSize: 14, marginTop: 8 }}>
-              Start the server on port 3001 (see <code>server/README.md</code>) and use{" "}
-              <code>npm run dev</code> here so Vite can proxy <code>/api</code>, or set{" "}
-              <code>VITE_API_BASE_URL</code>.
+            <span
+              style={{
+                display: "block",
+                fontWeight: 400,
+                fontSize: 14,
+                marginTop: 8,
+              }}
+            >
+              Start the server on port 3001 (see <code>server/README.md</code>){" "}
+              and use <code>npm run dev</code> here so Vite can proxy{" "}
+              <code>/api</code>, or set <code>VITE_API_BASE_URL</code>.
             </span>
           </p>
         )}
         {!apiLoading && !apiError && apiLots && apiLots.length === 0 && (
-          <p style={{ color: "#64748b" }}>No lots returned yet (empty database or no rows).</p>
+          <p style={{ color: "#64748b" }}>
+            No lots returned yet (empty database or no rows).
+          </p>
         )}
         {!apiLoading && !apiError && apiLots && apiLots.length > 0 && (
           <div style={{ overflowX: "auto" }}>
@@ -292,35 +406,93 @@ export default function App() {
             >
               <thead>
                 <tr style={{ textAlign: "left", color: "#64748b" }}>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot code</th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Lot name</th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>Zone</th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
-                    Expected occupancy %
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Lot code
                   </th>
-                  <th style={{ padding: "8px 6px", borderBottom: "1px solid #e2e8f0" }}>
-                    Latest supporting snapshot
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Lot name
+                  </th>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Zone
+                  </th>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Occupancy %
+                  </th>
+                  <th
+                    style={{
+                      padding: "8px 6px",
+                      borderBottom: "1px solid #e2e8f0",
+                    }}
+                  >
+                    Latest snapshot
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {apiLots.map((row) => (
                   <tr key={row.lotCode}>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.lotCode}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.lotName}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.zoneType}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
-                      {row.occupancyPercent === null ? "—" : `${row.occupancyPercent}%`}
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
+                      {row.occupancyPercent === null
+                        ? "-"
+                        : `${row.occupancyPercent}%`}
                     </td>
-                    <td style={{ padding: "10px 6px", borderBottom: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 6px",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                    >
                       {row.latestSnapshotTime === null
-                        ? "—"
+                        ? "-"
                         : new Date(row.latestSnapshotTime).toLocaleString()}
                     </td>
                   </tr>
@@ -331,7 +503,6 @@ export default function App() {
         )}
       </div>
 
-      {/* STATS */}
       <div
         style={{
           display: "grid",
@@ -344,7 +515,7 @@ export default function App() {
           ["Light Forecast", stats.light, "#2563eb"],
           ["Busy Lots", stats.busy, "#22c55e"],
           ["Heavy Forecast", stats.heavy, "#eab308"],
-          ["Your Access", availableLots.length, "#be123c"],
+          ["For you", availableLots.length, "#be123c"],
         ].map(([title, value, color]) => (
           <div
             key={title as string}
@@ -369,7 +540,6 @@ export default function App() {
         ))}
       </div>
 
-      {/* BEST LOT */}
       {bestLot && (
         <div
           style={{
@@ -394,12 +564,13 @@ export default function App() {
           </p>
 
           <p style={{ color: "#16a34a", fontWeight: 600 }}>
-            Lowest forecasted occupancy in your selected access category, based on historical patterns.
+            {showAccessibleOnly
+              ? "Showing accessible parking first. If the backend provides distance or rank fields, the nearest spots are prioritized."
+              : "Lowest forecasted occupancy in your selected access category, based on historical patterns."}
           </p>
         </div>
       )}
 
-      {/* ASK AI */}
       <div
         style={{
           background: "white",
@@ -411,10 +582,11 @@ export default function App() {
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>Ask the AI</h2>
         <p style={{ marginTop: 0, color: "#64748b", fontSize: 14 }}>
-          Questions go to <code>POST /api/parking/ask</code>: lot forecasts and recommendations use stored
-          historical snapshots; permit and policy questions use Marist's official Parking FAQ when matched.
-          Time-based parking questions may also include optional advisory context from Marist's official
-          athletics composite schedule.
+          Questions go to <code>POST /api/parking/ask</code>: lot forecasts and
+          recommendations use stored historical snapshots; permit and policy
+          questions use Marist's official Parking FAQ when matched. Time-based
+          parking questions may also include optional advisory context from
+          Marist's official athletics composite schedule.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input
@@ -452,7 +624,9 @@ export default function App() {
             {askLoading ? "Asking..." : "Ask"}
           </button>
         </div>
-        {askError && <p style={{ color: "#b91c1c", marginBottom: 0 }}>{askError}</p>}
+        {askError && (
+          <p style={{ color: "#b91c1c", marginBottom: 0 }}>{askError}</p>
+        )}
         {askResult && (
           <div
             id="ask-result"
@@ -464,51 +638,81 @@ export default function App() {
               border: "1px solid #e2e8f0",
             }}
           >
-            <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#64748b", fontWeight: 600 }}>
+            <p
+              style={{
+                margin: "0 0 8px 0",
+                fontSize: 12,
+                color: "#64748b",
+                fontWeight: 600,
+              }}
+            >
               Intent: {askResult.intent}
             </p>
             <p style={{ margin: 0, color: "#334155", whiteSpace: "pre-wrap" }}>
               {askResult.answer.trim() === ""
-                ? "(Empty answer from API — check backend logs and response shape.)"
+                ? "(Empty answer from API - check backend logs and response shape.)"
                 : askResult.answer}
             </p>
-            {askResult.intent === "parking_rules_faq" && askResult.sourceUrl && (
-              <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
-                {askResult.sourceTitle ?? "Source"}:{" "}
-                <a href={askResult.sourceUrl} target="_blank" rel="noreferrer">
-                  {askResult.sourceUrl}
-                </a>
-                {askResult.lastCheckedAt && (
-                  <span style={{ display: "block", marginTop: 4 }}>
-                    FAQ text last fetched: {new Date(askResult.lastCheckedAt).toLocaleString()}
-                  </span>
-                )}
-              </p>
-            )}
-            {askResult.sourceType === "official_athletics_schedule" && askResult.sourceUrl && (
-              <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#64748b" }}>
-                Athletics schedule (advisory):{" "}
-                <a href={askResult.sourceUrl} target="_blank" rel="noreferrer">
-                  {askResult.sourceUrl}
-                </a>
-                {askResult.lastCheckedAt && (
-                  <span style={{ display: "block", marginTop: 4 }}>
-                    Schedule data last checked: {new Date(askResult.lastCheckedAt).toLocaleString()}
-                  </span>
-                )}
-                {askResult.eventTitle && (
-                  <span style={{ display: "block", marginTop: 4 }}>
-                    Matched event: {askResult.eventTitle}
-                    {askResult.eventTime ? ` (${askResult.eventTime})` : ""}
-                  </span>
-                )}
-              </p>
-            )}
+            {askResult.intent === "parking_rules_faq" &&
+              askResult.sourceUrl && (
+                <p
+                  style={{
+                    margin: "10px 0 0 0",
+                    fontSize: 12,
+                    color: "#64748b",
+                  }}
+                >
+                  {askResult.sourceTitle ?? "Source"}:{" "}
+                  <a
+                    href={askResult.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {askResult.sourceUrl}
+                  </a>
+                  {askResult.lastCheckedAt && (
+                    <span style={{ display: "block", marginTop: 4 }}>
+                      FAQ text last fetched:{" "}
+                      {new Date(askResult.lastCheckedAt).toLocaleString()}
+                    </span>
+                  )}
+                </p>
+              )}
+            {askResult.sourceType === "official_athletics_schedule" &&
+              askResult.sourceUrl && (
+                <p
+                  style={{
+                    margin: "10px 0 0 0",
+                    fontSize: 12,
+                    color: "#64748b",
+                  }}
+                >
+                  Athletics schedule (advisory):{" "}
+                  <a
+                    href={askResult.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {askResult.sourceUrl}
+                  </a>
+                  {askResult.lastCheckedAt && (
+                    <span style={{ display: "block", marginTop: 4 }}>
+                      Schedule data last checked:{" "}
+                      {new Date(askResult.lastCheckedAt).toLocaleString()}
+                    </span>
+                  )}
+                  {askResult.eventTitle && (
+                    <span style={{ display: "block", marginTop: 4 }}>
+                      Matched event: {askResult.eventTitle}
+                      {askResult.eventTime ? ` (${askResult.eventTime})` : ""}
+                    </span>
+                  )}
+                </p>
+              )}
           </div>
         )}
       </div>
 
-      {/* LOT LIST */}
       <div
         style={{
           background: "white",
@@ -518,8 +722,18 @@ export default function App() {
         }}
       >
         <h2 style={{ color: "#be123c", marginTop: 0 }}>
-          Parking Lots and Forecast Snapshot
+          {showAccessibleOnly
+            ? "Accessible Parking Lots"
+            : "Available Parking Lots"}
         </h2>
+
+        {availableLots.length === 0 && (
+          <p style={{ color: "#64748b", marginBottom: 0 }}>
+            {showAccessibleOnly
+              ? "No accessible lots were identified in the current API response."
+              : "No lots match the current filter."}
+          </p>
+        )}
 
         {availableLots.map((lot) => {
           const occupancyFraction =
@@ -543,8 +757,17 @@ export default function App() {
                 <strong>
                   {lot.lotName} ({lot.lotCode})
                 </strong>
-                <strong style={{ color: occupancyFraction === null ? "#64748b" : getColor(occupancyFraction) }}>
-                  {lot.occupancyPercent === null ? "Unknown" : `${lot.occupancyPercent}%`}
+                <strong
+                  style={{
+                    color:
+                      occupancyFraction === null
+                        ? "#64748b"
+                        : getColor(occupancyFraction),
+                  }}
+                >
+                  {lot.occupancyPercent === null
+                    ? "Unknown"
+                    : `${lot.occupancyPercent}%`}
                 </strong>
               </div>
 
@@ -580,7 +803,7 @@ export default function App() {
                 <span>
                   Historical sample:{" "}
                   {lot.latestSnapshotTime === null
-                    ? "—"
+                    ? "-"
                     : new Date(lot.latestSnapshotTime).toLocaleString()}
                 </span>
               </div>
